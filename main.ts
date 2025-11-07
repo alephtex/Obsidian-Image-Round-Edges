@@ -351,12 +351,41 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		const currentFolder = currentFile.parent;
 		if (!currentFolder) return [];
 
-		return this.getImageFilesInFolder(currentFolder);
+		const folderPath = currentFolder.path;
+		const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
+
+		// Get all files in vault and filter for images in current folder path
+		const allFiles = this.app.vault.getFiles();
+		const imagesInFolder: TFile[] = [];
+
+		for (const file of allFiles) {
+			// Check if file path starts with the folder path (includes subfolders)
+			if (file.path.startsWith(folderPath + '/')) {
+				const extension = file.extension.toLowerCase();
+				if (imageExtensions.includes(extension)) {
+					imagesInFolder.push(file);
+				}
+			}
+		}
+
+		return imagesInFolder;
 	}
 
 	private getImagesInVault(): TFile[] {
-		const rootFolder = this.app.vault.getRoot();
-		return this.getImageFilesInFolder(rootFolder);
+		const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
+
+		// Get all files in the vault and filter for images
+		const allFiles = this.app.vault.getFiles();
+		const imagesInVault: TFile[] = [];
+
+		for (const file of allFiles) {
+			const extension = file.extension.toLowerCase();
+			if (imageExtensions.includes(extension)) {
+				imagesInVault.push(file);
+			}
+		}
+
+		return imagesInVault;
 	}
 
 	private getImageFilesInFolder(folder: TFolder): TFile[] {

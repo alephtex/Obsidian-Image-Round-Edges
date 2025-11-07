@@ -737,11 +737,31 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     const currentFolder = currentFile.parent;
     if (!currentFolder)
       return [];
-    return this.getImageFilesInFolder(currentFolder);
+    const folderPath = currentFolder.path;
+    const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
+    const allFiles = this.app.vault.getFiles();
+    const imagesInFolder = [];
+    for (const file of allFiles) {
+      if (file.path.startsWith(folderPath + "/")) {
+        const extension = file.extension.toLowerCase();
+        if (imageExtensions.includes(extension)) {
+          imagesInFolder.push(file);
+        }
+      }
+    }
+    return imagesInFolder;
   }
   getImagesInVault() {
-    const rootFolder = this.app.vault.getRoot();
-    return this.getImageFilesInFolder(rootFolder);
+    const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
+    const allFiles = this.app.vault.getFiles();
+    const imagesInVault = [];
+    for (const file of allFiles) {
+      const extension = file.extension.toLowerCase();
+      if (imageExtensions.includes(extension)) {
+        imagesInVault.push(file);
+      }
+    }
+    return imagesInVault;
   }
   getImageFilesInFolder(folder) {
     const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
