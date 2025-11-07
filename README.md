@@ -21,6 +21,7 @@ An Obsidian plugin that allows you to apply rounded corners to images in your no
 - **Undo/Redo**: Experimental undo/redo functionality in the modal
 - **Enhanced Settings**: Configure shadow and border defaults
 - **Bulk Processing**: Process all images in current subfolder or entire vault
+- **Referenced Image Detection**: Finds and processes images referenced in notes, not just physical files
 
 ## Requirements
 
@@ -47,12 +48,37 @@ When you run a command, a modal will appear allowing you:
 
 ## Bulk Processing
 
-The plugin also supports bulk processing of multiple images:
+The plugin supports two types of bulk processing:
 
-- **Command: "Rounded frame: process all images in current subfolder"** - Processes all images in the same folder as your current note
-- **Command: "Rounded frame: process all images in vault"** - Processes all images in your entire Obsidian vault
+### Referenced Images
+The commands find **all images referenced in your notes**, not just physical files. This means:
 
-These commands will apply the same radius, shadow, and border settings to all found images. Images are processed in their original folders and saved with rounded versions alongside the originals.
+- Images linked with `![alt](path/to/image.png)`
+- Wikilinks like `![[image.png|alt]]`
+- HTML img tags: `<img src="path/to/image.png">`
+- **Already processed images** (with `-rounded-` suffix) are also found and can be re-processed
+
+### Commands
+
+- **"Rounded frame: process all images in current subfolder"**
+  - Finds all images referenced in notes within the current folder and subfolders
+  - Also includes any physical image files in those folders
+  - Perfect for processing a specific project or section
+
+- **"Rounded frame: process all images in vault"**
+  - Finds all images referenced across your entire vault
+  - Includes physical image files from all folders
+  - Comprehensive processing of your entire knowledge base
+
+### How it works
+
+1. **Scan markdown files** for image references using regex patterns
+2. **Resolve relative paths** from the note's location
+3. **Combine with physical files** found in the folder structure
+4. **Deduplicate** to avoid processing the same image multiple times
+5. **Process all found images** with your chosen settings
+
+Images are processed in their original folders and saved with rounded versions alongside the originals, maintaining your vault's organization.
 
 ## Settings
 

@@ -112,31 +112,8 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
                 if (checking) return true; // Always available if there's an active view
 
-                const subfolderImages = this.getImagesInCurrentSubfolder(view);
-                if (subfolderImages.length === 0) {
-                    new Notice('No images found in current subfolder', 2000);
-                    return false;
-                }
-
-                const modal = new RoundedFrameModal(this.app, {
-                    initialRadius: this.settings.defaultPercent,
-                    initialUnit: this.settings.defaultUnit,
-                    defaultPercent: this.settings.defaultPercent,
-                    defaultPx: this.settings.defaultPx,
-                    imageSources: [], // No preview for bulk operations
-                    enableShadow: this.settings.enableShadow,
-                    shadowColor: this.settings.shadowColor,
-                    shadowBlur: this.settings.shadowBlur,
-                    shadowOffset: this.settings.shadowOffset,
-                    enableBorder: this.settings.enableBorder,
-                    borderColor: this.settings.borderColor,
-                    borderWidth: this.settings.borderWidth,
-                    onSubmit: async (radius, unit, shadow, border) => {
-                        await this.processBulkImages(view, subfolderImages, radius, unit, shadow, border);
-                        new Notice(`Processed ${subfolderImages.length} images in subfolder`, 3000);
-                    },
-                });
-                modal.open();
+                // Process asynchronously
+                this.processSubfolderImages(view);
                 return true;
             },
         });
@@ -148,31 +125,8 @@ export default class ImageRoundedFramePlugin extends Plugin {
             checkCallback: (checking) => {
                 if (checking) return true; // Always available
 
-                const vaultImages = this.getImagesInVault();
-                if (vaultImages.length === 0) {
-                    new Notice('No images found in vault', 2000);
-                    return false;
-                }
-
-                const modal = new RoundedFrameModal(this.app, {
-                    initialRadius: this.settings.defaultPercent,
-                    initialUnit: this.settings.defaultUnit,
-                    defaultPercent: this.settings.defaultPercent,
-                    defaultPx: this.settings.defaultPx,
-                    imageSources: [], // No preview for bulk operations
-                    enableShadow: this.settings.enableShadow,
-                    shadowColor: this.settings.shadowColor,
-                    shadowBlur: this.settings.shadowBlur,
-                    shadowOffset: this.settings.shadowOffset,
-                    enableBorder: this.settings.enableBorder,
-                    borderColor: this.settings.borderColor,
-                    borderWidth: this.settings.borderWidth,
-                    onSubmit: async (radius, unit, shadow, border) => {
-                        await this.processBulkImages(null, vaultImages, radius, unit, shadow, border);
-                        new Notice(`Processed ${vaultImages.length} images in vault`, 3000);
-                    },
-                });
-                modal.open();
+                // Process asynchronously
+                this.processVaultImages();
                 return true;
             },
         });
@@ -344,7 +298,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		this.storeLast(radius, unit);
 	}
 
-	private getImagesInCurrentSubfolder(view: MarkdownView): TFile[] {
+	private async getImagesInCurrentSubfolder(view: MarkdownView): Promise<TFile[]> {
 		if (!view.file) return [];
 
 		const currentFile = view.file;
@@ -352,7 +306,52 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		if (!currentFolder) return [];
 
 		const folderPath = currentFolder.path;
+
+		// Get all referenced images from markdown files in current folder
+		const referencedImages = await this.getReferencedImagesInFolder(currentFolder);
+
+		// Also get physical image files in the folder
+		const physicalImages = this.getPhysicalImagesInFolder(currentFolder);
+
+		// Combine and deduplicate
+		const allImages = new Map<string, TFile>();
+
+		// Add referenced images first (higher priority)
+		for (const img of referencedImages) {
+			allImages.set(img.path, img);
+		}
+
+		// Add physical images
+		for (const img of physicalImages) {
+			allImages.set(img.path, img);
+		}
+
+		return Array.from(allImages.values());
+	}
+
+	private async getReferencedImagesInFolder(folder: TFolder): Promise<TFile[]> {
+		const referencedImages: TFile[] = [];
+		const markdownFiles = this.getMarkdownFilesInFolder(folder);
+
+		for (const mdFile of markdownFiles) {
+			const content = await this.readFileContent(mdFile);
+			if (!content) continue;
+
+			const imageRefs = this.extractImageReferences(content);
+			for (const imagePath of imageRefs) {
+				const resolvedFile = this.resolveImageFile(imagePath, mdFile);
+				if (resolvedFile && !referencedImages.some(img => img.path === resolvedFile.path)) {
+					referencedImages.push(resolvedFile);
+				}
+			}
+		}
+
+		return referencedImages;
+	}
+
+	private getPhysicalImagesInFolder(folder: TFolder): TFile[] {
 		const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
+		const folderPath = folder.path;
 
 		// Get all files in vault and filter for images in current folder path
 		const allFiles = this.app.vault.getFiles();
@@ -371,21 +370,130 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		return imagesInFolder;
 	}
 
-	private getImagesInVault(): TFile[] {
-		const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
+	private getMarkdownFilesInFolder(folder: TFolder): TFile[] {
+		const markdownFiles: TFile[] = [];
+		const folderPath = folder.path;
 
-		// Get all files in the vault and filter for images
 		const allFiles = this.app.vault.getFiles();
-		const imagesInVault: TFile[] = [];
-
 		for (const file of allFiles) {
-			const extension = file.extension.toLowerCase();
-			if (imageExtensions.includes(extension)) {
-				imagesInVault.push(file);
+			if (file.path.startsWith(folderPath + '/') && file.extension.toLowerCase() === 'md') {
+				markdownFiles.push(file);
 			}
 		}
 
-		return imagesInVault;
+		return markdownFiles;
+	}
+
+	private async readFileContent(file: TFile): Promise<string | null> {
+		try {
+			// Try to read the file content
+			const content = await this.app.vault.read(file);
+			return content;
+		} catch (error) {
+			console.error('Error reading file:', file.path, error);
+			return null;
+		}
+	}
+
+	private extractImageReferences(content: string): string[] {
+		const imageRefs: string[] = [];
+
+		// Markdown image syntax: ![alt](path)
+		const mdRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
+		let mdMatch;
+		while ((mdMatch = mdRegex.exec(content)) !== null) {
+			imageRefs.push(mdMatch[2].trim());
+		}
+
+		// Wikilink image syntax: ![[path|alt]]
+		const wikiRegex = /!\[\[([^|\]]+)(?:\|([^\]]+))?\]\]/g;
+		let wikiMatch;
+		while ((wikiMatch = wikiRegex.exec(content)) !== null) {
+			imageRefs.push(wikiMatch[1].trim());
+		}
+
+		// HTML img tags: <img src="path">
+		const htmlRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
+		let htmlMatch;
+		while ((htmlMatch = htmlRegex.exec(content)) !== null) {
+			imageRefs.push(htmlMatch[1].trim());
+		}
+
+		return imageRefs;
+	}
+
+	private resolveImageFile(imagePath: string, sourceFile: TFile): TFile | null {
+		// Handle absolute paths
+		if (imagePath.startsWith('/')) {
+			try {
+				return this.app.vault.getAbstractFileByPath(imagePath.substring(1)) as TFile;
+			} catch {
+				return null;
+			}
+		}
+
+		// Handle relative paths
+		if (imagePath.startsWith('./') || imagePath.startsWith('../') || !imagePath.includes('/')) {
+			const sourceDir = sourceFile.parent?.path || '';
+			let resolvedPath = imagePath;
+
+			if (imagePath.startsWith('./')) {
+				resolvedPath = sourceDir ? `${sourceDir}/${imagePath.substring(2)}` : imagePath.substring(2);
+			} else if (!imagePath.includes('/')) {
+				resolvedPath = sourceDir ? `${sourceDir}/${imagePath}` : imagePath;
+			} else {
+				// Handle ../ relative paths
+				let currentDir = sourceDir;
+				let relPath = imagePath;
+
+				while (relPath.startsWith('../')) {
+					const parentDir = currentDir.substring(0, currentDir.lastIndexOf('/'));
+					currentDir = parentDir || '';
+					relPath = relPath.substring(3);
+				}
+
+				resolvedPath = currentDir ? `${currentDir}/${relPath}` : relPath;
+			}
+
+			try {
+				const file = this.app.vault.getAbstractFileByPath(resolvedPath) as TFile;
+				return file || null;
+			} catch {
+				return null;
+			}
+		}
+
+		// Handle other absolute paths
+		try {
+			return this.app.vault.getAbstractFileByPath(imagePath) as TFile;
+		} catch {
+			return null;
+		}
+	}
+
+	private async getImagesInVault(): Promise<TFile[]> {
+		const rootFolder = this.app.vault.getRoot();
+
+		// Get all referenced images from markdown files in vault
+		const referencedImages = await this.getReferencedImagesInFolder(rootFolder);
+
+		// Also get physical image files in the vault
+		const physicalImages = this.getPhysicalImagesInFolder(rootFolder);
+
+		// Combine and deduplicate
+		const allImages = new Map<string, TFile>();
+
+		// Add referenced images first (higher priority)
+		for (const img of referencedImages) {
+			allImages.set(img.path, img);
+		}
+
+		// Add physical images
+		for (const img of physicalImages) {
+			allImages.set(img.path, img);
+		}
+
+		return Array.from(allImages.values());
 	}
 
 	private getImageFilesInFolder(folder: TFolder): TFile[] {
@@ -410,6 +518,72 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		}
 
 		return images;
+	}
+
+	private async processSubfolderImages(view: MarkdownView): Promise<void> {
+		try {
+			const subfolderImages = await this.getImagesInCurrentSubfolder(view);
+			if (subfolderImages.length === 0) {
+				new Notice('No images found in current subfolder', 2000);
+				return;
+			}
+
+			const modal = new RoundedFrameModal(this.app, {
+				initialRadius: this.settings.defaultPercent,
+				initialUnit: this.settings.defaultUnit,
+				defaultPercent: this.settings.defaultPercent,
+				defaultPx: this.settings.defaultPx,
+				imageSources: [], // No preview for bulk operations
+				enableShadow: this.settings.enableShadow,
+				shadowColor: this.settings.shadowColor,
+				shadowBlur: this.settings.shadowBlur,
+				shadowOffset: this.settings.shadowOffset,
+				enableBorder: this.settings.enableBorder,
+				borderColor: this.settings.borderColor,
+				borderWidth: this.settings.borderWidth,
+				onSubmit: async (radius, unit, shadow, border) => {
+					await this.processBulkImages(view, subfolderImages, radius, unit, shadow, border);
+					new Notice(`Processed ${subfolderImages.length} images in subfolder`, 3000);
+				},
+			});
+			modal.open();
+		} catch (error) {
+			new Notice('Error processing subfolder images', 3000);
+			console.error(error);
+		}
+	}
+
+	private async processVaultImages(): Promise<void> {
+		try {
+			const vaultImages = await this.getImagesInVault();
+			if (vaultImages.length === 0) {
+				new Notice('No images found in vault', 2000);
+				return;
+			}
+
+			const modal = new RoundedFrameModal(this.app, {
+				initialRadius: this.settings.defaultPercent,
+				initialUnit: this.settings.defaultUnit,
+				defaultPercent: this.settings.defaultPercent,
+				defaultPx: this.settings.defaultPx,
+				imageSources: [], // No preview for bulk operations
+				enableShadow: this.settings.enableShadow,
+				shadowColor: this.settings.shadowColor,
+				shadowBlur: this.settings.shadowBlur,
+				shadowOffset: this.settings.shadowOffset,
+				enableBorder: this.settings.enableBorder,
+				borderColor: this.settings.borderColor,
+				borderWidth: this.settings.borderWidth,
+				onSubmit: async (radius, unit, shadow, border) => {
+					await this.processBulkImages(null, vaultImages, radius, unit, shadow, border);
+					new Notice(`Processed ${vaultImages.length} images in vault`, 3000);
+				},
+			});
+			modal.open();
+		} catch (error) {
+			new Notice('Error processing vault images', 3000);
+			console.error(error);
+		}
 	}
 
 	private async processBulkImages(view: MarkdownView | null, imageFiles: TFile[], radius: number, unit: RadiusUnit, shadow?: ShadowOptions, border?: BorderOptions): Promise<void> {

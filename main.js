@@ -520,31 +520,7 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
           return false;
         if (checking)
           return true;
-        const subfolderImages = this.getImagesInCurrentSubfolder(view);
-        if (subfolderImages.length === 0) {
-          new import_obsidian3.Notice("No images found in current subfolder", 2e3);
-          return false;
-        }
-        const modal = new RoundedFrameModal(this.app, {
-          initialRadius: this.settings.defaultPercent,
-          initialUnit: this.settings.defaultUnit,
-          defaultPercent: this.settings.defaultPercent,
-          defaultPx: this.settings.defaultPx,
-          imageSources: [],
-          // No preview for bulk operations
-          enableShadow: this.settings.enableShadow,
-          shadowColor: this.settings.shadowColor,
-          shadowBlur: this.settings.shadowBlur,
-          shadowOffset: this.settings.shadowOffset,
-          enableBorder: this.settings.enableBorder,
-          borderColor: this.settings.borderColor,
-          borderWidth: this.settings.borderWidth,
-          onSubmit: async (radius, unit, shadow, border) => {
-            await this.processBulkImages(view, subfolderImages, radius, unit, shadow, border);
-            new import_obsidian3.Notice(`Processed ${subfolderImages.length} images in subfolder`, 3e3);
-          }
-        });
-        modal.open();
+        this.processSubfolderImages(view);
         return true;
       }
     });
@@ -554,31 +530,7 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
       checkCallback: (checking) => {
         if (checking)
           return true;
-        const vaultImages = this.getImagesInVault();
-        if (vaultImages.length === 0) {
-          new import_obsidian3.Notice("No images found in vault", 2e3);
-          return false;
-        }
-        const modal = new RoundedFrameModal(this.app, {
-          initialRadius: this.settings.defaultPercent,
-          initialUnit: this.settings.defaultUnit,
-          defaultPercent: this.settings.defaultPercent,
-          defaultPx: this.settings.defaultPx,
-          imageSources: [],
-          // No preview for bulk operations
-          enableShadow: this.settings.enableShadow,
-          shadowColor: this.settings.shadowColor,
-          shadowBlur: this.settings.shadowBlur,
-          shadowOffset: this.settings.shadowOffset,
-          enableBorder: this.settings.enableBorder,
-          borderColor: this.settings.borderColor,
-          borderWidth: this.settings.borderWidth,
-          onSubmit: async (radius, unit, shadow, border) => {
-            await this.processBulkImages(null, vaultImages, radius, unit, shadow, border);
-            new import_obsidian3.Notice(`Processed ${vaultImages.length} images in vault`, 3e3);
-          }
-        });
-        modal.open();
+        this.processVaultImages();
         return true;
       }
     });
@@ -730,7 +682,7 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     }
     this.storeLast(radius, unit);
   }
-  getImagesInCurrentSubfolder(view) {
+  async getImagesInCurrentSubfolder(view) {
     if (!view.file)
       return [];
     const currentFile = view.file;
@@ -738,7 +690,37 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     if (!currentFolder)
       return [];
     const folderPath = currentFolder.path;
+    const referencedImages = await this.getReferencedImagesInFolder(currentFolder);
+    const physicalImages = this.getPhysicalImagesInFolder(currentFolder);
+    const allImages = /* @__PURE__ */ new Map();
+    for (const img of referencedImages) {
+      allImages.set(img.path, img);
+    }
+    for (const img of physicalImages) {
+      allImages.set(img.path, img);
+    }
+    return Array.from(allImages.values());
+  }
+  async getReferencedImagesInFolder(folder) {
+    const referencedImages = [];
+    const markdownFiles = this.getMarkdownFilesInFolder(folder);
+    for (const mdFile of markdownFiles) {
+      const content = await this.readFileContent(mdFile);
+      if (!content)
+        continue;
+      const imageRefs = this.extractImageReferences(content);
+      for (const imagePath of imageRefs) {
+        const resolvedFile = this.resolveImageFile(imagePath, mdFile);
+        if (resolvedFile && !referencedImages.some((img) => img.path === resolvedFile.path)) {
+          referencedImages.push(resolvedFile);
+        }
+      }
+    }
+    return referencedImages;
+  }
+  getPhysicalImagesInFolder(folder) {
     const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
+    const folderPath = folder.path;
     const allFiles = this.app.vault.getFiles();
     const imagesInFolder = [];
     for (const file of allFiles) {
@@ -751,17 +733,96 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     }
     return imagesInFolder;
   }
-  getImagesInVault() {
-    const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
+  getMarkdownFilesInFolder(folder) {
+    const markdownFiles = [];
+    const folderPath = folder.path;
     const allFiles = this.app.vault.getFiles();
-    const imagesInVault = [];
     for (const file of allFiles) {
-      const extension = file.extension.toLowerCase();
-      if (imageExtensions.includes(extension)) {
-        imagesInVault.push(file);
+      if (file.path.startsWith(folderPath + "/") && file.extension.toLowerCase() === "md") {
+        markdownFiles.push(file);
       }
     }
-    return imagesInVault;
+    return markdownFiles;
+  }
+  async readFileContent(file) {
+    try {
+      const content = await this.app.vault.read(file);
+      return content;
+    } catch (error) {
+      console.error("Error reading file:", file.path, error);
+      return null;
+    }
+  }
+  extractImageReferences(content) {
+    const imageRefs = [];
+    const mdRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
+    let mdMatch;
+    while ((mdMatch = mdRegex.exec(content)) !== null) {
+      imageRefs.push(mdMatch[2].trim());
+    }
+    const wikiRegex = /!\[\[([^|\]]+)(?:\|([^\]]+))?\]\]/g;
+    let wikiMatch;
+    while ((wikiMatch = wikiRegex.exec(content)) !== null) {
+      imageRefs.push(wikiMatch[1].trim());
+    }
+    const htmlRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
+    let htmlMatch;
+    while ((htmlMatch = htmlRegex.exec(content)) !== null) {
+      imageRefs.push(htmlMatch[1].trim());
+    }
+    return imageRefs;
+  }
+  resolveImageFile(imagePath, sourceFile) {
+    var _a;
+    if (imagePath.startsWith("/")) {
+      try {
+        return this.app.vault.getAbstractFileByPath(imagePath.substring(1));
+      } catch (e) {
+        return null;
+      }
+    }
+    if (imagePath.startsWith("./") || imagePath.startsWith("../") || !imagePath.includes("/")) {
+      const sourceDir = ((_a = sourceFile.parent) == null ? void 0 : _a.path) || "";
+      let resolvedPath = imagePath;
+      if (imagePath.startsWith("./")) {
+        resolvedPath = sourceDir ? `${sourceDir}/${imagePath.substring(2)}` : imagePath.substring(2);
+      } else if (!imagePath.includes("/")) {
+        resolvedPath = sourceDir ? `${sourceDir}/${imagePath}` : imagePath;
+      } else {
+        let currentDir = sourceDir;
+        let relPath = imagePath;
+        while (relPath.startsWith("../")) {
+          const parentDir = currentDir.substring(0, currentDir.lastIndexOf("/"));
+          currentDir = parentDir || "";
+          relPath = relPath.substring(3);
+        }
+        resolvedPath = currentDir ? `${currentDir}/${relPath}` : relPath;
+      }
+      try {
+        const file = this.app.vault.getAbstractFileByPath(resolvedPath);
+        return file || null;
+      } catch (e) {
+        return null;
+      }
+    }
+    try {
+      return this.app.vault.getAbstractFileByPath(imagePath);
+    } catch (e) {
+      return null;
+    }
+  }
+  async getImagesInVault() {
+    const rootFolder = this.app.vault.getRoot();
+    const referencedImages = await this.getReferencedImagesInFolder(rootFolder);
+    const physicalImages = this.getPhysicalImagesInFolder(rootFolder);
+    const allImages = /* @__PURE__ */ new Map();
+    for (const img of referencedImages) {
+      allImages.set(img.path, img);
+    }
+    for (const img of physicalImages) {
+      allImages.set(img.path, img);
+    }
+    return Array.from(allImages.values());
   }
   getImageFilesInFolder(folder) {
     const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
@@ -780,6 +841,70 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
       }
     }
     return images;
+  }
+  async processSubfolderImages(view) {
+    try {
+      const subfolderImages = await this.getImagesInCurrentSubfolder(view);
+      if (subfolderImages.length === 0) {
+        new import_obsidian3.Notice("No images found in current subfolder", 2e3);
+        return;
+      }
+      const modal = new RoundedFrameModal(this.app, {
+        initialRadius: this.settings.defaultPercent,
+        initialUnit: this.settings.defaultUnit,
+        defaultPercent: this.settings.defaultPercent,
+        defaultPx: this.settings.defaultPx,
+        imageSources: [],
+        // No preview for bulk operations
+        enableShadow: this.settings.enableShadow,
+        shadowColor: this.settings.shadowColor,
+        shadowBlur: this.settings.shadowBlur,
+        shadowOffset: this.settings.shadowOffset,
+        enableBorder: this.settings.enableBorder,
+        borderColor: this.settings.borderColor,
+        borderWidth: this.settings.borderWidth,
+        onSubmit: async (radius, unit, shadow, border) => {
+          await this.processBulkImages(view, subfolderImages, radius, unit, shadow, border);
+          new import_obsidian3.Notice(`Processed ${subfolderImages.length} images in subfolder`, 3e3);
+        }
+      });
+      modal.open();
+    } catch (error) {
+      new import_obsidian3.Notice("Error processing subfolder images", 3e3);
+      console.error(error);
+    }
+  }
+  async processVaultImages() {
+    try {
+      const vaultImages = await this.getImagesInVault();
+      if (vaultImages.length === 0) {
+        new import_obsidian3.Notice("No images found in vault", 2e3);
+        return;
+      }
+      const modal = new RoundedFrameModal(this.app, {
+        initialRadius: this.settings.defaultPercent,
+        initialUnit: this.settings.defaultUnit,
+        defaultPercent: this.settings.defaultPercent,
+        defaultPx: this.settings.defaultPx,
+        imageSources: [],
+        // No preview for bulk operations
+        enableShadow: this.settings.enableShadow,
+        shadowColor: this.settings.shadowColor,
+        shadowBlur: this.settings.shadowBlur,
+        shadowOffset: this.settings.shadowOffset,
+        enableBorder: this.settings.enableBorder,
+        borderColor: this.settings.borderColor,
+        borderWidth: this.settings.borderWidth,
+        onSubmit: async (radius, unit, shadow, border) => {
+          await this.processBulkImages(null, vaultImages, radius, unit, shadow, border);
+          new import_obsidian3.Notice(`Processed ${vaultImages.length} images in vault`, 3e3);
+        }
+      });
+      modal.open();
+    } catch (error) {
+      new import_obsidian3.Notice("Error processing vault images", 3e3);
+      console.error(error);
+    }
   }
   async processBulkImages(view, imageFiles, radius, unit, shadow, border) {
     this.style.updateStyles(radius, unit, shadow, border);
