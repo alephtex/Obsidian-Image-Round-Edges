@@ -13,13 +13,16 @@ An Obsidian plugin that allows you to apply rounded corners to images in your no
 - Supports Markdown images, Wikilinks, and HTML img tags
 - Uses Python PIL/Pillow for robust image processing with Canvas API fallback
 
-### ✨ Latest Features (v1.3.0)
+### ✨ Latest Features (v1.4.0)
 
-- **Interactive Shadow Controls**: Color picker, blur slider, and offset slider with live preview
-- **Advanced Border Controls**: Color picker, width slider, and style selector (solid/dashed/dotted)
-- **Collapsible UI Sections**: Clean modal interface that expands when effects are enabled
-- **Real-time Updates**: All changes instantly reflected in image previews
-- **Enhanced Undo/Redo**: Supports all interactive control changes
+- **Sequential Queue Processing**: 500ms delay between images with real-time progress popup
+- **Interactive Confirmation Popup**: Floating top-right popup to confirm or undo actions immediately
+- **Dual Backup System**: Hidden folder + local backups for maximum data safety
+- **Robust Path Sanitization**: Handles malformed/embedded image references gracefully
+- **Debug Logging**: Automatic vault-root logging of all failures for easy diagnosis
+- **Embedded Python Script**: Auto-installs processing script, no manual setup needed
+- **Overwrite-Safe Processing**: Handles existing files without errors
+- **Always-Visible Commands**: All commands available in palette regardless of context
 
 ### ✨ Previous Major Features
 
@@ -166,6 +169,20 @@ If you encounter any issues or have questions:
 - Ensure you're using the latest version of the plugin
 
 ## Changelog
+
+### v1.4.0
+- **Queue System**: Sequential processing with 500ms delay between images
+- **Progress Popup**: Real-time top-right popup showing done/success/failed counts
+- **Confirmation Popup**: Interactive floating popup to confirm or undo actions after processing
+- **Dual Backups**: Hidden folder (`.obsidian-image-round-edges-backups/`) + local backups (`filename.backup-timestamp.ext`)
+- **Path Sanitization**: Robust extraction of image paths from malformed/embedded references
+- **Debug Logging**: Automatic `image-rounded-frame-debug.log` in vault root with timestamped failure details
+- **Embedded Python**: Auto-installs `round_image.py` on plugin load, no manual setup
+- **Overwrite-Safe**: Processes to temp files then writes to final location, handles existing files
+- **Always-Visible Commands**: All commands show in palette with runtime validation
+- **Continue-on-Failure**: Queue processes remaining images even if some fail
+- **Emergency Recovery**: Command to scan and list all backup files
+- **Force Cleanup**: Command to remove all backup files with confirmation
 
 ### v1.3.0
 - Added interactive shadow controls: color picker, blur slider, offset slider
