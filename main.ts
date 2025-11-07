@@ -259,7 +259,20 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 				const { blob, newPath } = await this.roundImageFile(file, radius, unit);
 				await this.writeRoundedVersion(newPath, blob);
-				updates.push({ match: m, newPath, success: true });
+
+				// Verify the file was actually written and is accessible
+				try {
+					const writtenFile = this.app.vault.getAbstractFileByPath(newPath);
+					if (writtenFile && writtenFile instanceof TFile && writtenFile.stat.size > 0) {
+						updates.push({ match: m, newPath, success: true });
+					} else {
+						console.error(`Failed to verify written file: ${newPath}`);
+						updates.push({ match: m, newPath: '', success: false });
+					}
+				} catch (error) {
+					console.error(`Error verifying written file ${newPath}:`, error);
+					updates.push({ match: m, newPath: '', success: false });
+				}
 			} catch (err) {
 				new Notice(`Failed to round image: ${m.path} - ${err}`, 3000);
 				updates.push({ match: m, newPath: '', success: false });
@@ -277,21 +290,39 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 		for (const update of sortedUpdates) {
 			if (update.success) {
-				// Adjust position based on previous updates in the same line
-				const adjustedMatch = {
-					...update.match,
-					start: update.match.start + positionOffset,
-					end: update.match.end + positionOffset
-				};
-				this.updateReference(editor, view, adjustedMatch, update.newPath);
-				new Notice(`Rounded image saved: ${update.newPath}`, 1500);
+				// Verify the processed image actually exists before updating reference
+				try {
+					const processedFile = this.app.vault.getAbstractFileByPath(update.newPath);
+					if (!processedFile || !(processedFile instanceof TFile)) {
+						console.warn(`Processed image not found at ${update.newPath}, skipping reference update`);
+						continue;
+					}
 
-				// Calculate position offset for next updates in same line
-				const oldLength = update.match.end - update.match.start;
-				const newPath = this.getRelativePathForNote(view, update.newPath);
-				const newRef = this.buildReference(update.match, newPath);
-				const newLength = newRef.length;
-				positionOffset += newLength - oldLength;
+					// Double-check file size is reasonable (not empty/corrupted)
+					if (processedFile.stat.size === 0) {
+						console.warn(`Processed image ${update.newPath} is empty, skipping reference update`);
+						continue;
+					}
+
+					// Adjust position based on previous updates in the same line
+					const adjustedMatch = {
+						...update.match,
+						start: update.match.start + positionOffset,
+						end: update.match.end + positionOffset
+					};
+					this.updateReference(editor, view, adjustedMatch, update.newPath);
+					new Notice(`Rounded image saved: ${update.newPath}`, 1500);
+
+					// Calculate position offset for next updates in same line
+					const oldLength = update.match.end - update.match.start;
+					const newPath = this.getRelativePathForNote(view, update.newPath);
+					const newRef = this.buildReference(update.match, newPath);
+					const newLength = newRef.length;
+					positionOffset += newLength - oldLength;
+				} catch (error) {
+					console.error(`Error verifying processed image ${update.newPath}:`, error);
+					new Notice(`Warning: Could not verify processed image ${update.newPath}`, 3000);
+				}
 			}
 		}
 
@@ -626,6 +657,19 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 				const { blob, newPath } = await this.roundImageFile(imageFile, radius, unit);
 				await this.writeRoundedVersion(newPath, blob);
+
+				// Verify the file was actually written and is accessible
+				try {
+					const writtenFile = this.app.vault.getAbstractFileByPath(newPath);
+					if (!writtenFile || !(writtenFile instanceof TFile) || writtenFile.stat.size === 0) {
+						console.error(`Bulk processing: Failed to verify written file: ${newPath}`);
+						// Continue with next image, don't count this as successful
+						continue;
+					}
+				} catch (error) {
+					console.error(`Bulk processing: Error verifying written file ${newPath}:`, error);
+					continue;
+				}
 
 				// For bulk operations, we don't update references in notes since there are no references to update
 				// The images are just processed and saved with rounded versions

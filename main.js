@@ -651,7 +651,18 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
         }
         const { blob, newPath } = await this.roundImageFile(file, radius, unit);
         await this.writeRoundedVersion(newPath, blob);
-        updates.push({ match: m, newPath, success: true });
+        try {
+          const writtenFile = this.app.vault.getAbstractFileByPath(newPath);
+          if (writtenFile && writtenFile instanceof import_obsidian3.TFile && writtenFile.stat.size > 0) {
+            updates.push({ match: m, newPath, success: true });
+          } else {
+            console.error(`Failed to verify written file: ${newPath}`);
+            updates.push({ match: m, newPath: "", success: false });
+          }
+        } catch (error) {
+          console.error(`Error verifying written file ${newPath}:`, error);
+          updates.push({ match: m, newPath: "", success: false });
+        }
       } catch (err) {
         new import_obsidian3.Notice(`Failed to round image: ${m.path} - ${err}`, 3e3);
         updates.push({ match: m, newPath: "", success: false });
@@ -666,18 +677,32 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     });
     for (const update of sortedUpdates) {
       if (update.success) {
-        const adjustedMatch = {
-          ...update.match,
-          start: update.match.start + positionOffset,
-          end: update.match.end + positionOffset
-        };
-        this.updateReference(editor, view, adjustedMatch, update.newPath);
-        new import_obsidian3.Notice(`Rounded image saved: ${update.newPath}`, 1500);
-        const oldLength = update.match.end - update.match.start;
-        const newPath = this.getRelativePathForNote(view, update.newPath);
-        const newRef = this.buildReference(update.match, newPath);
-        const newLength = newRef.length;
-        positionOffset += newLength - oldLength;
+        try {
+          const processedFile = this.app.vault.getAbstractFileByPath(update.newPath);
+          if (!processedFile || !(processedFile instanceof import_obsidian3.TFile)) {
+            console.warn(`Processed image not found at ${update.newPath}, skipping reference update`);
+            continue;
+          }
+          if (processedFile.stat.size === 0) {
+            console.warn(`Processed image ${update.newPath} is empty, skipping reference update`);
+            continue;
+          }
+          const adjustedMatch = {
+            ...update.match,
+            start: update.match.start + positionOffset,
+            end: update.match.end + positionOffset
+          };
+          this.updateReference(editor, view, adjustedMatch, update.newPath);
+          new import_obsidian3.Notice(`Rounded image saved: ${update.newPath}`, 1500);
+          const oldLength = update.match.end - update.match.start;
+          const newPath = this.getRelativePathForNote(view, update.newPath);
+          const newRef = this.buildReference(update.match, newPath);
+          const newLength = newRef.length;
+          positionOffset += newLength - oldLength;
+        } catch (error) {
+          console.error(`Error verifying processed image ${update.newPath}:`, error);
+          new import_obsidian3.Notice(`Warning: Could not verify processed image ${update.newPath}`, 3e3);
+        }
       }
     }
     this.storeLast(radius, unit);
@@ -939,6 +964,16 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
         };
         const { blob, newPath } = await this.roundImageFile(imageFile, radius, unit);
         await this.writeRoundedVersion(newPath, blob);
+        try {
+          const writtenFile = this.app.vault.getAbstractFileByPath(newPath);
+          if (!writtenFile || !(writtenFile instanceof import_obsidian3.TFile) || writtenFile.stat.size === 0) {
+            console.error(`Bulk processing: Failed to verify written file: ${newPath}`);
+            continue;
+          }
+        } catch (error) {
+          console.error(`Bulk processing: Error verifying written file ${newPath}:`, error);
+          continue;
+        }
         processedCount++;
         if (processedCount % 10 === 0 || processedCount === totalCount) {
           new import_obsidian3.Notice(`Processed ${processedCount}/${totalCount} images`, 1e3);

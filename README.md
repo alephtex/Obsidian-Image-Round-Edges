@@ -80,6 +80,13 @@ The commands find **all images referenced in your notes**, not just physical fil
 
 Images are processed in their original folders and saved with rounded versions alongside the originals, maintaining your vault's organization.
 
+### Safety Features
+
+- **File Verification**: References in notes are only updated after confirming the processed image was successfully saved
+- **Existence Checks**: Plugin verifies processed images exist and are not empty before updating links
+- **Error Recovery**: Failed image processing doesn't break note references
+- **Atomic Operations**: Each image is fully processed before moving to the next
+
 ## Settings
 
 - **Default unit**: Choose between percent or pixels
