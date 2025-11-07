@@ -704,30 +704,18 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
   async getReferencedImagesInFolder(folder) {
     const referencedImages = [];
     const markdownFiles = this.getMarkdownFilesInFolder(folder);
-    console.log(`Scanning ${markdownFiles.length} markdown files in folder ${folder.path}`);
     for (const mdFile of markdownFiles) {
       const content = await this.readFileContent(mdFile);
-      if (!content) {
-        console.log(`Could not read content of ${mdFile.path}`);
+      if (!content)
         continue;
-      }
-      console.log(`Processing ${mdFile.path}, content length: ${content.length}`);
       const imageRefs = this.extractImageReferences(content);
-      console.log(`Found ${imageRefs.length} image references in ${mdFile.path}:`, imageRefs);
       for (const imagePath of imageRefs) {
-        console.log(`Resolving image path: ${imagePath} from ${mdFile.path}`);
         const resolvedFile = this.resolveImageFile(imagePath, mdFile);
-        if (resolvedFile) {
-          console.log(`Resolved to: ${resolvedFile.path}`);
-          if (!referencedImages.some((img) => img.path === resolvedFile.path)) {
-            referencedImages.push(resolvedFile);
-          }
-        } else {
-          console.log(`Could not resolve: ${imagePath}`);
+        if (resolvedFile && !referencedImages.some((img) => img.path === resolvedFile.path)) {
+          referencedImages.push(resolvedFile);
         }
       }
     }
-    console.log(`Total referenced images found: ${referencedImages.length}`);
     return referencedImages;
   }
   getPhysicalImagesInFolder(folder) {
@@ -767,60 +755,42 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
   }
   extractImageReferences(content) {
     const imageRefs = [];
-    console.log("Extracting image references from content...");
     const mdRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
     let mdMatch;
     while ((mdMatch = mdRegex.exec(content)) !== null) {
-      const path2 = mdMatch[2].trim();
-      console.log(`Found markdown image: ${path2}`);
-      imageRefs.push(path2);
+      imageRefs.push(mdMatch[2].trim());
     }
     const wikiRegex = /!\[\[([^|\]]+)(?:\|([^\]]+))?\]\]/g;
     let wikiMatch;
     while ((wikiMatch = wikiRegex.exec(content)) !== null) {
-      const path2 = wikiMatch[1].trim();
-      console.log(`Found wikilink image: ${path2}`);
-      imageRefs.push(path2);
+      imageRefs.push(wikiMatch[1].trim());
     }
     const htmlRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
     let htmlMatch;
     while ((htmlMatch = htmlRegex.exec(content)) !== null) {
-      const path2 = htmlMatch[1].trim();
-      console.log(`Found HTML image: ${path2}`);
-      imageRefs.push(path2);
+      imageRefs.push(htmlMatch[1].trim());
     }
-    console.log(`Total image references found: ${imageRefs.length}`);
     return imageRefs;
   }
   resolveImageFile(imagePath, sourceFile) {
-    var _a;
-    console.log(`Resolving image path: "${imagePath}" from source: "${sourceFile.path}"`);
+    var _a, _b;
     let decodedPath;
     try {
       decodedPath = decodeURIComponent(imagePath);
-      console.log(`URL-decoded path: "${decodedPath}"`);
     } catch (error) {
-      console.log(`Could not URL-decode path, using original: "${imagePath}"`);
       decodedPath = imagePath;
     }
-    if (decodedPath.startsWith("/")) {
-      try {
-        const resolved = this.app.vault.getAbstractFileByPath(decodedPath.substring(1));
-        console.log(`Resolved absolute path to: ${(resolved == null ? void 0 : resolved.path) || "null"}`);
-        return resolved || null;
-      } catch (error) {
-        console.log(`Error resolving absolute path: ${error}`);
-        return null;
-      }
+    try {
+      const file = this.app.vault.getAbstractFileByPath(decodedPath);
+      if (file)
+        return file;
+    } catch (error) {
     }
-    if (decodedPath.startsWith("./") || decodedPath.startsWith("../") || !decodedPath.includes("/")) {
+    if (decodedPath.startsWith("./") || decodedPath.startsWith("../")) {
       const sourceDir = ((_a = sourceFile.parent) == null ? void 0 : _a.path) || "";
-      console.log(`Source directory: "${sourceDir}"`);
       let resolvedPath = decodedPath;
       if (decodedPath.startsWith("./")) {
         resolvedPath = sourceDir ? `${sourceDir}/${decodedPath.substring(2)}` : decodedPath.substring(2);
-      } else if (!decodedPath.includes("/")) {
-        resolvedPath = sourceDir ? `${sourceDir}/${decodedPath}` : decodedPath;
       } else {
         let currentDir = sourceDir;
         let relPath = decodedPath;
@@ -831,24 +801,31 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
         }
         resolvedPath = currentDir ? `${currentDir}/${relPath}` : relPath;
       }
-      console.log(`Constructed resolved path: "${resolvedPath}"`);
       try {
         const file = this.app.vault.getAbstractFileByPath(resolvedPath);
-        console.log(`File resolved to: ${(file == null ? void 0 : file.path) || "null"}`);
         return file || null;
       } catch (error) {
-        console.log(`Error resolving relative path: ${error}`);
-        return null;
       }
     }
-    try {
-      const file = this.app.vault.getAbstractFileByPath(decodedPath);
-      console.log(`Resolved other path to: ${(file == null ? void 0 : file.path) || "null"}`);
-      return file || null;
-    } catch (error) {
-      console.log(`Error resolving other path: ${error}`);
-      return null;
+    if (decodedPath.includes("/") && !decodedPath.startsWith("/")) {
+      try {
+        const file = this.app.vault.getAbstractFileByPath(decodedPath);
+        if (file)
+          return file;
+      } catch (error) {
+      }
     }
+    if (!decodedPath.includes("/")) {
+      const sourceDir = ((_b = sourceFile.parent) == null ? void 0 : _b.path) || "";
+      const resolvedPath = sourceDir ? `${sourceDir}/${decodedPath}` : decodedPath;
+      try {
+        const file = this.app.vault.getAbstractFileByPath(resolvedPath);
+        if (file)
+          return file;
+      } catch (error) {
+      }
+    }
+    return null;
   }
   async getImagesInVault() {
     const rootFolder = this.app.vault.getRoot();

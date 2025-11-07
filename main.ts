@@ -333,35 +333,20 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		const referencedImages: TFile[] = [];
 		const markdownFiles = this.getMarkdownFilesInFolder(folder);
 
-		console.log(`Scanning ${markdownFiles.length} markdown files in folder ${folder.path}`);
-
 		for (const mdFile of markdownFiles) {
 			const content = await this.readFileContent(mdFile);
-			if (!content) {
-				console.log(`Could not read content of ${mdFile.path}`);
-				continue;
-			}
-
-			console.log(`Processing ${mdFile.path}, content length: ${content.length}`);
+			if (!content) continue;
 
 			const imageRefs = this.extractImageReferences(content);
-			console.log(`Found ${imageRefs.length} image references in ${mdFile.path}:`, imageRefs);
 
 			for (const imagePath of imageRefs) {
-				console.log(`Resolving image path: ${imagePath} from ${mdFile.path}`);
 				const resolvedFile = this.resolveImageFile(imagePath, mdFile);
-				if (resolvedFile) {
-					console.log(`Resolved to: ${resolvedFile.path}`);
-					if (!referencedImages.some(img => img.path === resolvedFile.path)) {
-						referencedImages.push(resolvedFile);
-					}
-				} else {
-					console.log(`Could not resolve: ${imagePath}`);
+				if (resolvedFile && !referencedImages.some(img => img.path === resolvedFile.path)) {
+					referencedImages.push(resolvedFile);
 				}
 			}
 		}
 
-		console.log(`Total referenced images found: ${referencedImages.length}`);
 		return referencedImages;
 	}
 
@@ -414,75 +399,54 @@ export default class ImageRoundedFramePlugin extends Plugin {
 	private extractImageReferences(content: string): string[] {
 		const imageRefs: string[] = [];
 
-		console.log('Extracting image references from content...');
-
 		// Markdown image syntax: ![alt](path)
-		// Updated regex to capture everything until closing parenthesis
 		const mdRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
 		let mdMatch;
 		while ((mdMatch = mdRegex.exec(content)) !== null) {
-			const path = mdMatch[2].trim();
-			console.log(`Found markdown image: ${path}`);
-			imageRefs.push(path);
+			imageRefs.push(mdMatch[2].trim());
 		}
 
 		// Wikilink image syntax: ![[path|alt]]
 		const wikiRegex = /!\[\[([^|\]]+)(?:\|([^\]]+))?\]\]/g;
 		let wikiMatch;
 		while ((wikiMatch = wikiRegex.exec(content)) !== null) {
-			const path = wikiMatch[1].trim();
-			console.log(`Found wikilink image: ${path}`);
-			imageRefs.push(path);
+			imageRefs.push(wikiMatch[1].trim());
 		}
 
 		// HTML img tags: <img src="path">
 		const htmlRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
 		let htmlMatch;
 		while ((htmlMatch = htmlRegex.exec(content)) !== null) {
-			const path = htmlMatch[1].trim();
-			console.log(`Found HTML image: ${path}`);
-			imageRefs.push(path);
+			imageRefs.push(htmlMatch[1].trim());
 		}
 
-		console.log(`Total image references found: ${imageRefs.length}`);
 		return imageRefs;
 	}
 
 	private resolveImageFile(imagePath: string, sourceFile: TFile): TFile | null {
-		console.log(`Resolving image path: "${imagePath}" from source: "${sourceFile.path}"`);
-
 		// URL-decode the path first
 		let decodedPath: string;
 		try {
 			decodedPath = decodeURIComponent(imagePath);
-			console.log(`URL-decoded path: "${decodedPath}"`);
 		} catch (error) {
-			console.log(`Could not URL-decode path, using original: "${imagePath}"`);
 			decodedPath = imagePath;
 		}
 
-		// Handle absolute paths
-		if (decodedPath.startsWith('/')) {
-			try {
-				const resolved = this.app.vault.getAbstractFileByPath(decodedPath.substring(1)) as TFile;
-				console.log(`Resolved absolute path to: ${resolved?.path || 'null'}`);
-				return resolved || null;
-			} catch (error) {
-				console.log(`Error resolving absolute path: ${error}`);
-				return null;
-			}
-		}
+		// Try different resolution strategies
 
-		// Handle relative paths
-		if (decodedPath.startsWith('./') || decodedPath.startsWith('../') || !decodedPath.includes('/')) {
+		// 1. First try as direct vault path (most common in Obsidian)
+		try {
+			const file = this.app.vault.getAbstractFileByPath(decodedPath) as TFile;
+			if (file) return file;
+		} catch (error) {}
+
+		// 2. Handle explicit relative paths
+		if (decodedPath.startsWith('./') || decodedPath.startsWith('../')) {
 			const sourceDir = sourceFile.parent?.path || '';
-			console.log(`Source directory: "${sourceDir}"`);
 			let resolvedPath = decodedPath;
 
 			if (decodedPath.startsWith('./')) {
 				resolvedPath = sourceDir ? `${sourceDir}/${decodedPath.substring(2)}` : decodedPath.substring(2);
-			} else if (!decodedPath.includes('/')) {
-				resolvedPath = sourceDir ? `${sourceDir}/${decodedPath}` : decodedPath;
 			} else {
 				// Handle ../ relative paths
 				let currentDir = sourceDir;
@@ -497,27 +461,33 @@ export default class ImageRoundedFramePlugin extends Plugin {
 				resolvedPath = currentDir ? `${currentDir}/${relPath}` : relPath;
 			}
 
-			console.log(`Constructed resolved path: "${resolvedPath}"`);
+			try {
+				const file = this.app.vault.getAbstractFileByPath(resolvedPath) as TFile;
+				return file || null;
+			} catch (error) {}
+		}
+
+		// 3. Handle paths without explicit relative markers but with slashes
+		if (decodedPath.includes('/') && !decodedPath.startsWith('/')) {
+			// This might be a path relative to vault root
+			try {
+				const file = this.app.vault.getAbstractFileByPath(decodedPath) as TFile;
+				if (file) return file;
+			} catch (error) {}
+		}
+
+		// 4. Try relative to source file directory for simple filenames
+		if (!decodedPath.includes('/')) {
+			const sourceDir = sourceFile.parent?.path || '';
+			const resolvedPath = sourceDir ? `${sourceDir}/${decodedPath}` : decodedPath;
 
 			try {
 				const file = this.app.vault.getAbstractFileByPath(resolvedPath) as TFile;
-				console.log(`File resolved to: ${file?.path || 'null'}`);
-				return file || null;
-			} catch (error) {
-				console.log(`Error resolving relative path: ${error}`);
-				return null;
-			}
+				if (file) return file;
+			} catch (error) {}
 		}
 
-		// Handle other paths (might be relative to vault root)
-		try {
-			const file = this.app.vault.getAbstractFileByPath(decodedPath) as TFile;
-			console.log(`Resolved other path to: ${file?.path || 'null'}`);
-			return file || null;
-		} catch (error) {
-			console.log(`Error resolving other path: ${error}`);
-			return null;
-		}
+		return null;
 	}
 
 	private async getImagesInVault(): Promise<TFile[]> {
