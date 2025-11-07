@@ -15,6 +15,14 @@ export interface RoundedFrameSettings {
 	lastUnit: RadiusUnit;
 	lastPercent: number;
 	lastPx: number;
+	// New shadow and border options
+	enableShadow: boolean;
+	shadowColor: string;
+	shadowBlur: number;
+	shadowOffset: number;
+	enableBorder: boolean;
+	borderColor: string;
+	borderWidth: number;
 }
 
 export const DEFAULT_SETTINGS: RoundedFrameSettings = {
@@ -25,6 +33,14 @@ export const DEFAULT_SETTINGS: RoundedFrameSettings = {
 	lastUnit: 'percent',
 	lastPercent: 25,
 	lastPx: 24,
+	// New shadow and border defaults
+	enableShadow: false,
+	shadowColor: '#000000',
+	shadowBlur: 10,
+	shadowOffset: 5,
+	enableBorder: false,
+	borderColor: '#cccccc',
+	borderWidth: 2,
 };
 
 export class RoundedFrameSettingTab extends PluginSettingTab {
@@ -86,6 +102,98 @@ export class RoundedFrameSettingTab extends PluginSettingTab {
 				toggle.setValue(this.plugin.settings.rememberLast);
 				toggle.onChange(async (value) => {
 					this.plugin.settings.rememberLast = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		// Shadow settings
+		containerEl.createEl('h3', { text: 'Shadow Effects' });
+
+		new Setting(containerEl)
+			.setName('Enable shadow')
+			.setDesc('Add a shadow effect to rounded images.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.enableShadow);
+				toggle.onChange(async (value) => {
+					this.plugin.settings.enableShadow = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Shadow color')
+			.setDesc('Color of the shadow effect.')
+			.addText((text) => {
+				text.setValue(this.plugin.settings.shadowColor);
+				text.onChange(async (value) => {
+					this.plugin.settings.shadowColor = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Shadow blur')
+			.setDesc('Blur radius of the shadow (0-50px).')
+			.addSlider((slider) => {
+				slider
+					.setLimits(0, 50, 1)
+					.setDynamicTooltip()
+					.setValue(this.plugin.settings.shadowBlur);
+				slider.onChange(async (value) => {
+					this.plugin.settings.shadowBlur = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Shadow offset')
+			.setDesc('Offset of the shadow (0-20px).')
+			.addSlider((slider) => {
+				slider
+					.setLimits(0, 20, 1)
+					.setDynamicTooltip()
+					.setValue(this.plugin.settings.shadowOffset);
+				slider.onChange(async (value) => {
+					this.plugin.settings.shadowOffset = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		// Border settings
+		containerEl.createEl('h3', { text: 'Border Effects' });
+
+		new Setting(containerEl)
+			.setName('Enable border')
+			.setDesc('Add a border around rounded images.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.enableBorder);
+				toggle.onChange(async (value) => {
+					this.plugin.settings.enableBorder = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Border color')
+			.setDesc('Color of the border.')
+			.addText((text) => {
+				text.setValue(this.plugin.settings.borderColor);
+				text.onChange(async (value) => {
+					this.plugin.settings.borderColor = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Border width')
+			.setDesc('Width of the border (1-10px).')
+			.addSlider((slider) => {
+				slider
+					.setLimits(1, 10, 1)
+					.setDynamicTooltip()
+					.setValue(this.plugin.settings.borderWidth);
+				slider.onChange(async (value) => {
+					this.plugin.settings.borderWidth = value;
 					await this.plugin.saveSettings();
 				});
 			});

@@ -52,7 +52,15 @@ var DEFAULT_SETTINGS = {
   rememberLast: true,
   lastUnit: "percent",
   lastPercent: 25,
-  lastPx: 24
+  lastPx: 24,
+  // New shadow and border defaults
+  enableShadow: false,
+  shadowColor: "#000000",
+  shadowBlur: 10,
+  shadowOffset: 5,
+  enableBorder: false,
+  borderColor: "#cccccc",
+  borderWidth: 2
 };
 var RoundedFrameSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -93,6 +101,57 @@ var RoundedFrameSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
+    containerEl.createEl("h3", { text: "Shadow Effects" });
+    new import_obsidian.Setting(containerEl).setName("Enable shadow").setDesc("Add a shadow effect to rounded images.").addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.enableShadow);
+      toggle.onChange(async (value) => {
+        this.plugin.settings.enableShadow = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian.Setting(containerEl).setName("Shadow color").setDesc("Color of the shadow effect.").addText((text) => {
+      text.setValue(this.plugin.settings.shadowColor);
+      text.onChange(async (value) => {
+        this.plugin.settings.shadowColor = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian.Setting(containerEl).setName("Shadow blur").setDesc("Blur radius of the shadow (0-50px).").addSlider((slider) => {
+      slider.setLimits(0, 50, 1).setDynamicTooltip().setValue(this.plugin.settings.shadowBlur);
+      slider.onChange(async (value) => {
+        this.plugin.settings.shadowBlur = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian.Setting(containerEl).setName("Shadow offset").setDesc("Offset of the shadow (0-20px).").addSlider((slider) => {
+      slider.setLimits(0, 20, 1).setDynamicTooltip().setValue(this.plugin.settings.shadowOffset);
+      slider.onChange(async (value) => {
+        this.plugin.settings.shadowOffset = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    containerEl.createEl("h3", { text: "Border Effects" });
+    new import_obsidian.Setting(containerEl).setName("Enable border").setDesc("Add a border around rounded images.").addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.enableBorder);
+      toggle.onChange(async (value) => {
+        this.plugin.settings.enableBorder = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian.Setting(containerEl).setName("Border color").setDesc("Color of the border.").addText((text) => {
+      text.setValue(this.plugin.settings.borderColor);
+      text.onChange(async (value) => {
+        this.plugin.settings.borderColor = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian.Setting(containerEl).setName("Border width").setDesc("Width of the border (1-10px).").addSlider((slider) => {
+      slider.setLimits(1, 10, 1).setDynamicTooltip().setValue(this.plugin.settings.borderWidth);
+      slider.onChange(async (value) => {
+        this.plugin.settings.borderWidth = value;
+        await this.plugin.saveSettings();
+      });
+    });
   }
 };
 
@@ -106,11 +165,27 @@ var RoundedStyleManager = class {
       this.styleEl = document.createElement("style");
       this.styleEl.id = "rounded-frame-style";
       document.head.appendChild(this.styleEl);
-      this.appendRule(`img.${CLASS_NAME}{display:inline-block;border:2px solid var(--background-modifier-border);}`);
+      this.appendRule(`img.${CLASS_NAME}{display:inline-block;}`);
     }
   }
   ensureRule(unit, value) {
     return CLASS_NAME;
+  }
+  updateStyles(radius, unit, shadow, border) {
+    this.currentShadow = shadow;
+    this.currentBorder = border;
+    while (this.styleEl.firstChild) {
+      this.styleEl.removeChild(this.styleEl.firstChild);
+    }
+    let cssRule = `img.${CLASS_NAME} { display: inline-block;`;
+    if (border == null ? void 0 : border.enabled) {
+      cssRule += ` border: ${border.width}px solid ${border.color};`;
+    }
+    if (shadow == null ? void 0 : shadow.enabled) {
+      cssRule += ` box-shadow: ${shadow.offset}px ${shadow.offset}px ${shadow.blur}px ${shadow.color};`;
+    }
+    cssRule += ` }`;
+    this.appendRule(cssRule);
   }
   appendRule(rule) {
     this.styleEl.appendChild(document.createTextNode(`${rule}
@@ -122,16 +197,42 @@ var RoundedStyleManager = class {
 var import_obsidian2 = require("obsidian");
 var RoundedFrameModal = class extends import_obsidian2.Modal {
   constructor(app, opts) {
+    var _a, _b, _c, _d, _e, _f, _g;
     super(app);
     this.opts = opts;
+    this.undoStack = [];
+    this.redoStack = [];
     this.radius = opts.initialRadius;
     this.unit = opts.initialUnit;
+    this.shadow = {
+      enabled: (_a = opts.enableShadow) != null ? _a : false,
+      color: (_b = opts.shadowColor) != null ? _b : "#000000",
+      blur: (_c = opts.shadowBlur) != null ? _c : 10,
+      offset: (_d = opts.shadowOffset) != null ? _d : 5
+    };
+    this.border = {
+      enabled: (_e = opts.enableBorder) != null ? _e : false,
+      color: (_f = opts.borderColor) != null ? _f : "#cccccc",
+      width: (_g = opts.borderWidth) != null ? _g : 2
+    };
+    this.saveState();
   }
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("rounded-frame-modal");
     contentEl.createEl("h2", { text: "Rounded frame" });
+    const effectRow = contentEl.createDiv("rounded-frame-effect-row");
+    const shadowToggle = effectRow.createEl("button", {
+      text: "Shadow",
+      attr: { "data-effect": "shadow" }
+    });
+    const borderToggle = effectRow.createEl("button", {
+      text: "Border",
+      attr: { "data-effect": "border" }
+    });
+    shadowToggle.classList.toggle("mod-cta", this.shadow.enabled);
+    borderToggle.classList.toggle("mod-cta", this.border.enabled);
     const unitRow = contentEl.createDiv("rounded-frame-unit-row");
     const percentBtn = unitRow.createEl("button", { text: "Percent" });
     const pixelBtn = unitRow.createEl("button", { text: "Pixels" });
@@ -153,18 +254,24 @@ var RoundedFrameModal = class extends import_obsidian2.Modal {
     pixelInput.step = "1";
     pixelInput.value = String(pixelRadius);
     const previewContainer = contentEl.createDiv("rounded-frame-preview");
-    let previewImg = null;
-    if (this.opts.imageSrc) {
-      previewImg = previewContainer.createEl("img", {
-        attr: { src: this.opts.imageSrc, alt: "Preview image" }
+    let previewImages = [];
+    const imageSources = this.opts.imageSources || (this.opts.imageSrc ? [this.opts.imageSrc] : []);
+    for (const src of imageSources) {
+      const img = previewContainer.createEl("img", {
+        attr: { src, alt: "Preview image" }
       });
-      previewImg.addClass("rounded-frame-preview-img");
+      img.addClass("rounded-frame-preview-img");
+      previewImages.push(img);
     }
     const buttonRow = contentEl.createDiv("rounded-frame-button-row");
+    const undoBtn = buttonRow.createEl("button", { text: "Undo" });
+    const redoBtn = buttonRow.createEl("button", { text: "Redo" });
     const resetBtn = buttonRow.createEl("button", { text: "Reset" });
     const cancelBtn = buttonRow.createEl("button", { text: "Cancel" });
     const applyBtn = buttonRow.createEl("button", { text: "Apply" });
     applyBtn.addClass("mod-cta");
+    undoBtn.disabled = this.undoStack.length <= 1;
+    redoBtn.disabled = this.redoStack.length === 0;
     const syncUI = () => {
       if (this.unit === "percent") {
         percentSection.removeClass("rounded-frame-hidden");
@@ -176,10 +283,10 @@ var RoundedFrameModal = class extends import_obsidian2.Modal {
         percentSection.addClass("rounded-frame-hidden");
         pixelInput.value = String(pixelRadius);
       }
-      if (previewImg) {
+      for (const img of previewImages) {
         const calcRadius = () => {
-          const w = previewImg.naturalWidth || previewImg.width || previewImg.offsetWidth;
-          const h = previewImg.naturalHeight || previewImg.height || previewImg.offsetHeight;
+          const w = img.naturalWidth || img.width || img.offsetWidth;
+          const h = img.naturalHeight || img.height || img.offsetHeight;
           if (!w || !h)
             return;
           const baseDimension = Math.min(w, h);
@@ -191,12 +298,22 @@ var RoundedFrameModal = class extends import_obsidian2.Modal {
             radiusPx = pixelRadius;
           }
           radiusPx = Math.min(radiusPx, maxRadius);
-          previewImg.style.borderRadius = Math.max(0, radiusPx) + "px";
+          img.style.borderRadius = Math.max(0, radiusPx) + "px";
+          if (this.shadow.enabled) {
+            img.style.boxShadow = `${this.shadow.offset}px ${this.shadow.offset}px ${this.shadow.blur}px ${this.shadow.color}`;
+          } else {
+            img.style.boxShadow = "";
+          }
+          if (this.border.enabled) {
+            img.style.border = `${this.border.width}px solid ${this.border.color}`;
+          } else {
+            img.style.border = "";
+          }
         };
-        if (previewImg.complete) {
+        if (img.complete) {
           calcRadius();
         } else {
-          previewImg.addEventListener("load", calcRadius, { once: true });
+          img.addEventListener("load", calcRadius, { once: true });
         }
       }
     };
@@ -207,17 +324,41 @@ var RoundedFrameModal = class extends import_obsidian2.Modal {
       pixelBtn.toggleClass("mod-cta", unit === "px");
       syncUI();
     };
+    shadowToggle.addEventListener("click", () => {
+      this.shadow.enabled = !this.shadow.enabled;
+      shadowToggle.classList.toggle("mod-cta", this.shadow.enabled);
+      this.saveState();
+      syncUI();
+    });
+    borderToggle.addEventListener("click", () => {
+      this.border.enabled = !this.border.enabled;
+      borderToggle.classList.toggle("mod-cta", this.border.enabled);
+      this.saveState();
+      syncUI();
+    });
     percentBtn.addEventListener("click", () => setUnit("percent"));
     pixelBtn.addEventListener("click", () => setUnit("px"));
     percentSlider.addEventListener("input", (evt) => {
       percentRadius = Number(evt.target.value);
       this.radius = percentRadius;
+      this.saveState();
       syncUI();
     });
     pixelInput.addEventListener("input", (evt) => {
       const value = Number(evt.target.value);
       pixelRadius = this.clamp(Number.isFinite(value) ? value : 0, 0, 400);
       this.radius = pixelRadius;
+      this.saveState();
+      syncUI();
+    });
+    undoBtn.addEventListener("click", () => {
+      this.undo();
+      this.updateUndoRedoButtons(undoBtn, redoBtn);
+      syncUI();
+    });
+    redoBtn.addEventListener("click", () => {
+      this.redo();
+      this.updateUndoRedoButtons(undoBtn, redoBtn);
       syncUI();
     });
     resetBtn.addEventListener("click", () => {
@@ -228,17 +369,53 @@ var RoundedFrameModal = class extends import_obsidian2.Modal {
         pixelRadius = this.opts.defaultPx;
         this.radius = pixelRadius;
       }
+      this.saveState();
       syncUI();
     });
     cancelBtn.addEventListener("click", () => this.close());
     applyBtn.addEventListener("click", () => {
-      this.opts.onSubmit(this.radius, this.unit);
+      this.opts.onSubmit(this.radius, this.unit, this.shadow, this.border);
       this.close();
     });
     setUnit(this.unit);
   }
   onClose() {
     this.contentEl.empty();
+  }
+  saveState() {
+    const state = {
+      radius: this.radius,
+      unit: this.unit,
+      shadow: { ...this.shadow },
+      border: { ...this.border }
+    };
+    this.undoStack.push(state);
+    this.redoStack = [];
+  }
+  undo() {
+    if (this.undoStack.length > 1) {
+      const currentState = this.undoStack.pop();
+      this.redoStack.push(currentState);
+      const previousState = this.undoStack[this.undoStack.length - 1];
+      this.restoreState(previousState);
+    }
+  }
+  redo() {
+    if (this.redoStack.length > 0) {
+      const state = this.redoStack.pop();
+      this.undoStack.push(state);
+      this.restoreState(state);
+    }
+  }
+  restoreState(state) {
+    this.radius = state.radius;
+    this.unit = state.unit;
+    this.shadow = { ...state.shadow };
+    this.border = { ...state.border };
+  }
+  updateUndoRedoButtons(undoBtn, redoBtn) {
+    undoBtn.disabled = this.undoStack.length <= 1;
+    redoBtn.disabled = this.redoStack.length === 0;
   }
   clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
@@ -280,15 +457,22 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
         if (unique.length === 0)
           return false;
         const first = visible[0];
-        const firstSrc = first.getAttribute("src") || first.getAttribute("data-src") || void 0;
+        const imageSources = visible.map((img) => img.getAttribute("src") || img.getAttribute("data-src") || "").filter((src) => src);
         const initial = this.getInitialRadius();
         const modal = new RoundedFrameModal(this.app, {
           initialRadius: initial.radius,
           initialUnit: initial.unit,
           defaultPercent: this.settings.defaultPercent,
           defaultPx: this.settings.defaultPx,
-          imageSrc: firstSrc,
-          onSubmit: (radius, unit) => this.applyRoundedFrameToMatches(view, unique, radius, unit)
+          imageSources,
+          enableShadow: this.settings.enableShadow,
+          shadowColor: this.settings.shadowColor,
+          shadowBlur: this.settings.shadowBlur,
+          shadowOffset: this.settings.shadowOffset,
+          enableBorder: this.settings.enableBorder,
+          borderColor: this.settings.borderColor,
+          borderWidth: this.settings.borderWidth,
+          onSubmit: (radius, unit, shadow, border) => this.applyRoundedFrameToMatches(view, unique, radius, unit, shadow, border)
         });
         modal.open();
         return true;
@@ -312,8 +496,16 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
           initialUnit: initial.unit,
           defaultPercent: this.settings.defaultPercent,
           defaultPx: this.settings.defaultPx,
-          imageSrc: void 0,
-          onSubmit: (radius, unit) => this.applyRoundedFrameToMatches(view, all, radius, unit)
+          imageSources: [],
+          // Will show generic preview for all images
+          enableShadow: this.settings.enableShadow,
+          shadowColor: this.settings.shadowColor,
+          shadowBlur: this.settings.shadowBlur,
+          shadowOffset: this.settings.shadowOffset,
+          enableBorder: this.settings.enableBorder,
+          borderColor: this.settings.borderColor,
+          borderWidth: this.settings.borderWidth,
+          onSubmit: (radius, unit, shadow, border) => this.applyRoundedFrameToMatches(view, all, radius, unit, shadow, border)
         });
         modal.open();
         return true;
@@ -411,7 +603,7 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     }
     return out;
   }
-  async applyRoundedFrameToMatches(view, matches, radius, unit) {
+  async applyRoundedFrameToMatches(view, matches, radius, unit, shadow, border) {
     const editor = view.editor;
     const refreshed = [];
     for (const m of matches) {
@@ -419,7 +611,14 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
       if (updated)
         refreshed.push(updated);
     }
-    refreshed.sort((a, b) => a.lineNumber === b.lineNumber ? b.start - a.start : b.lineNumber - a.lineNumber);
+    refreshed.sort((a, b) => {
+      if (a.lineNumber !== b.lineNumber) {
+        return b.lineNumber - a.lineNumber;
+      }
+      return b.start - a.start;
+    });
+    this.style.updateStyles(radius, unit, shadow, border);
+    const updates = [];
     for (const m of refreshed) {
       try {
         const file = this.resolveTFile(view, m.path);
@@ -429,13 +628,89 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
         }
         const { blob, newPath } = await this.roundImageFile(file, radius, unit);
         await this.writeRoundedVersion(newPath, blob);
-        this.updateReference(editor, view, m, newPath);
-        new import_obsidian3.Notice(`Rounded image saved: ${newPath}`, 1500);
+        updates.push({ match: m, newPath, success: true });
       } catch (err) {
         new import_obsidian3.Notice(`Failed to round image: ${m.path} - ${err}`, 3e3);
+        updates.push({ match: m, newPath: "", success: false });
+      }
+    }
+    let positionOffset = 0;
+    const sortedUpdates = updates.sort((a, b) => {
+      if (a.match.lineNumber !== b.match.lineNumber) {
+        return a.match.lineNumber - b.match.lineNumber;
+      }
+      return a.match.start - b.match.start;
+    });
+    for (const update of sortedUpdates) {
+      if (update.success) {
+        const adjustedMatch = {
+          ...update.match,
+          start: update.match.start + positionOffset,
+          end: update.match.end + positionOffset
+        };
+        this.updateReference(editor, view, adjustedMatch, update.newPath);
+        new import_obsidian3.Notice(`Rounded image saved: ${update.newPath}`, 1500);
+        const oldLength = update.match.end - update.match.start;
+        const newPath = this.getRelativePathForNote(view, update.newPath);
+        const newRef = this.buildReference(update.match, newPath);
+        const newLength = newRef.length;
+        positionOffset += newLength - oldLength;
       }
     }
     this.storeLast(radius, unit);
+  }
+  getRelativePathForNote(view, absolutePath) {
+    var _a, _b, _c, _d;
+    const originalPath = absolutePath;
+    const currentFile = view.file;
+    let finalPath = absolutePath;
+    if (originalPath.startsWith("./") && currentFile) {
+      const newFile = this.app.vault.getAbstractFileByPath(absolutePath);
+      if (newFile) {
+        const currentDir = ((_a = currentFile.parent) == null ? void 0 : _a.path) || "";
+        const newFileDir = ((_b = newFile.parent) == null ? void 0 : _b.path) || "";
+        if (newFileDir === currentDir) {
+          finalPath = "./" + newFile.basename + "." + newFile.extension;
+        } else if (currentDir && newFileDir.startsWith(currentDir + "/")) {
+          const subPath = newFileDir.substring(currentDir.length + 1);
+          finalPath = "./" + subPath + "/" + newFile.basename + "." + newFile.extension;
+        } else {
+          const currentParts = currentDir.split("/").filter((p) => p);
+          const newParts = newFileDir.split("/").filter((p) => p);
+          let commonLength = 0;
+          while (commonLength < currentParts.length && commonLength < newParts.length && currentParts[commonLength] === newParts[commonLength]) {
+            commonLength++;
+          }
+          const upLevels = currentParts.length - commonLength;
+          const relativeParts = newParts.slice(commonLength);
+          const fileName = newFile.basename + "." + newFile.extension;
+          if (upLevels === 0 && relativeParts.length === 0) {
+            finalPath = "./" + fileName;
+          } else {
+            finalPath = "../".repeat(upLevels) + relativeParts.join("/") + "/" + fileName;
+          }
+        }
+      }
+    } else if (!originalPath.startsWith("/") && !/^[A-Za-z]:/.test(originalPath) && !originalPath.startsWith("./") && currentFile) {
+      const newFile = this.app.vault.getAbstractFileByPath(absolutePath);
+      if (newFile) {
+        const currentDir = ((_c = currentFile.parent) == null ? void 0 : _c.path) || "";
+        const newFileDir = ((_d = newFile.parent) == null ? void 0 : _d.path) || "";
+        if (newFileDir === currentDir) {
+          finalPath = newFile.basename + "." + newFile.extension;
+        }
+      }
+    }
+    return finalPath;
+  }
+  buildReference(match, newPath) {
+    if (match.kind === "markdown") {
+      return `![${match.alt}](${newPath})`;
+    } else if (match.kind === "wikilink") {
+      return `![[${newPath}|${match.alt}]]`;
+    } else {
+      return `<img src="${newPath}" alt="${match.alt}">`;
+    }
   }
   collectMatches(line, lineNumber) {
     var _a;
@@ -627,64 +902,13 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     }
   }
   updateReference(editor, view, match, newPath) {
-    var _a, _b, _c, _d;
+    const finalPath = this.getRelativePathForNote(view, newPath);
     const originalPath = match.path;
-    const currentFile = view.file;
-    let finalPath = newPath;
-    if (originalPath.startsWith("./") && currentFile) {
-      const newFile = this.app.vault.getAbstractFileByPath(newPath);
-      if (newFile) {
-        const currentDir = ((_a = currentFile.parent) == null ? void 0 : _a.path) || "";
-        const newFileDir = ((_b = newFile.parent) == null ? void 0 : _b.path) || "";
-        if (newFileDir === currentDir) {
-          finalPath = "./" + newFile.basename + "." + newFile.extension;
-        } else if (currentDir && newFileDir.startsWith(currentDir + "/")) {
-          const subPath = newFileDir.substring(currentDir.length + 1);
-          finalPath = "./" + subPath + "/" + newFile.basename + "." + newFile.extension;
-        } else {
-          const currentParts = currentDir.split("/").filter((p) => p);
-          const newParts = newFileDir.split("/").filter((p) => p);
-          let commonLength = 0;
-          while (commonLength < currentParts.length && commonLength < newParts.length && currentParts[commonLength] === newParts[commonLength]) {
-            commonLength++;
-          }
-          const upLevels = currentParts.length - commonLength;
-          const relativeParts = newParts.slice(commonLength);
-          const fileName = newFile.basename + "." + newFile.extension;
-          if (upLevels === 0 && relativeParts.length === 0) {
-            finalPath = "./" + fileName;
-          } else {
-            finalPath = "../".repeat(upLevels) + relativeParts.join("/") + "/" + fileName;
-          }
-        }
-      }
-    } else if (!originalPath.startsWith("/") && !/^[A-Za-z]:/.test(originalPath) && !originalPath.startsWith("./") && currentFile) {
-      const newFile = this.app.vault.getAbstractFileByPath(newPath);
-      if (newFile) {
-        const currentDir = ((_c = currentFile.parent) == null ? void 0 : _c.path) || "";
-        const newFileDir = ((_d = newFile.parent) == null ? void 0 : _d.path) || "";
-        if (newFileDir === currentDir) {
-          finalPath = newFile.basename + "." + newFile.extension;
-        } else if (currentDir && newFileDir.startsWith(currentDir + "/")) {
-          finalPath = newFileDir.substring(currentDir.length + 1) + "/" + newFile.basename + "." + newFile.extension;
-        }
-      }
-    }
+    let processedPath = finalPath;
     if (originalPath.includes("%20") || originalPath.includes(" ")) {
-      finalPath = finalPath.replace(/ /g, "%20");
+      processedPath = finalPath.replace(/ /g, "%20");
     }
-    let replacement = "";
-    switch (match.kind) {
-      case "markdown":
-        replacement = `![${match.alt}](${finalPath})`;
-        break;
-      case "wikilink":
-        replacement = match.alt && match.alt !== match.path ? `![[${finalPath}|${match.alt}]]` : `![[${finalPath}]]`;
-        break;
-      case "html":
-        replacement = `<img src="${finalPath}" alt="${match.alt}">`;
-        break;
-    }
+    const replacement = this.buildReference(match, processedPath);
     editor.replaceRange(replacement, { line: match.lineNumber, ch: match.start }, { line: match.lineNumber, ch: match.end });
   }
   resolvePreviewSrc(view, match) {

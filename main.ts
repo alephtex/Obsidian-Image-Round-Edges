@@ -13,7 +13,7 @@ import * as fs from 'fs';
 const execAsync = promisify(exec);
 import { RoundedFrameSettings, DEFAULT_SETTINGS, RoundedFrameSettingTab, RadiusUnit } from './settings';
 import { RoundedStyleManager } from './style-manager';
-import { RoundedFrameModal } from './modal';
+import { RoundedFrameModal, ShadowOptions, BorderOptions } from './modal';
 
 interface ImageMatch { lineNumber: number; start: number; end: number; path: string; alt: string; raw: string; kind: 'markdown' | 'wikilink' | 'html'; }
 
@@ -48,15 +48,22 @@ export default class ImageRoundedFramePlugin extends Plugin {
                 if (unique.length === 0) return false;
 
                 const first = visible[0];
-                const firstSrc = first.getAttribute('src') || first.getAttribute('data-src') || undefined;
+                const imageSources = visible.map(img => img.getAttribute('src') || img.getAttribute('data-src') || '').filter(src => src);
                 const initial = this.getInitialRadius();
                 const modal = new RoundedFrameModal(this.app, {
                     initialRadius: initial.radius,
                     initialUnit: initial.unit,
                     defaultPercent: this.settings.defaultPercent,
                     defaultPx: this.settings.defaultPx,
-                    imageSrc: firstSrc,
-                    onSubmit: (radius, unit) => this.applyRoundedFrameToMatches(view, unique, radius, unit),
+                    imageSources: imageSources,
+                    enableShadow: this.settings.enableShadow,
+                    shadowColor: this.settings.shadowColor,
+                    shadowBlur: this.settings.shadowBlur,
+                    shadowOffset: this.settings.shadowOffset,
+                    enableBorder: this.settings.enableBorder,
+                    borderColor: this.settings.borderColor,
+                    borderWidth: this.settings.borderWidth,
+                    onSubmit: (radius, unit, shadow, border) => this.applyRoundedFrameToMatches(view, unique, radius, unit, shadow, border),
                 });
                 modal.open();
                 return true;
@@ -80,8 +87,15 @@ export default class ImageRoundedFramePlugin extends Plugin {
                     initialUnit: initial.unit,
                     defaultPercent: this.settings.defaultPercent,
                     defaultPx: this.settings.defaultPx,
-                    imageSrc: undefined,
-                    onSubmit: (radius, unit) => this.applyRoundedFrameToMatches(view, all, radius, unit),
+                    imageSources: [], // Will show generic preview for all images
+                    enableShadow: this.settings.enableShadow,
+                    shadowColor: this.settings.shadowColor,
+                    shadowBlur: this.settings.shadowBlur,
+                    shadowOffset: this.settings.shadowOffset,
+                    enableBorder: this.settings.enableBorder,
+                    borderColor: this.settings.borderColor,
+                    borderWidth: this.settings.borderWidth,
+                    onSubmit: (radius, unit, shadow, border) => this.applyRoundedFrameToMatches(view, all, radius, unit, shadow, border),
                 });
                 modal.open();
                 return true;
@@ -185,14 +199,26 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		return out;
 	}
 
-    private async applyRoundedFrameToMatches(view: MarkdownView, matches: ImageMatch[], radius: number, unit: RadiusUnit): Promise<void> {
+    private async applyRoundedFrameToMatches(view: MarkdownView, matches: ImageMatch[], radius: number, unit: RadiusUnit, shadow?: ShadowOptions, border?: BorderOptions): Promise<void> {
 		const editor = view.editor;
 		const refreshed: ImageMatch[] = [];
 		for (const m of matches) {
 			const updated = this.refreshMatch(editor, m);
 			if (updated) refreshed.push(updated);
 		}
-		refreshed.sort((a, b) => (a.lineNumber === b.lineNumber ? b.start - a.start : b.lineNumber - a.lineNumber));
+		// Sort by line number, then by start position (descending for same line to avoid position shifts)
+		refreshed.sort((a, b) => {
+			if (a.lineNumber !== b.lineNumber) {
+				return b.lineNumber - a.lineNumber; // Process later lines first
+			}
+			return b.start - a.start; // Process later positions first in same line
+		});
+
+		// Update styles once for all images
+		this.style.updateStyles(radius, unit, shadow, border);
+
+		// Process all images and collect the updates
+		const updates: Array<{match: ImageMatch, newPath: string, success: boolean}> = [];
 
 		for (const m of refreshed) {
 			try {
@@ -201,16 +227,114 @@ export default class ImageRoundedFramePlugin extends Plugin {
 					new Notice(`Could not find file: ${m.path}`, 2000);
 					continue;
 				}
-				
+
 				const { blob, newPath } = await this.roundImageFile(file, radius, unit);
 				await this.writeRoundedVersion(newPath, blob);
-				this.updateReference(editor, view, m, newPath);
-				new Notice(`Rounded image saved: ${newPath}`, 1500);
+				updates.push({ match: m, newPath, success: true });
 			} catch (err) {
 				new Notice(`Failed to round image: ${m.path} - ${err}`, 3000);
+				updates.push({ match: m, newPath: '', success: false });
 			}
 		}
+
+		// Apply all reference updates at once (this helps with position management)
+		let positionOffset = 0;
+		const sortedUpdates = updates.sort((a, b) => {
+			if (a.match.lineNumber !== b.match.lineNumber) {
+				return a.match.lineNumber - b.match.lineNumber;
+			}
+			return a.match.start - b.match.start;
+		});
+
+		for (const update of sortedUpdates) {
+			if (update.success) {
+				// Adjust position based on previous updates in the same line
+				const adjustedMatch = {
+					...update.match,
+					start: update.match.start + positionOffset,
+					end: update.match.end + positionOffset
+				};
+				this.updateReference(editor, view, adjustedMatch, update.newPath);
+				new Notice(`Rounded image saved: ${update.newPath}`, 1500);
+
+				// Calculate position offset for next updates in same line
+				const oldLength = update.match.end - update.match.start;
+				const newPath = this.getRelativePathForNote(view, update.newPath);
+				const newRef = this.buildReference(update.match, newPath);
+				const newLength = newRef.length;
+				positionOffset += newLength - oldLength;
+			}
+		}
+
 		this.storeLast(radius, unit);
+	}
+
+	private getRelativePathForNote(view: MarkdownView, absolutePath: string): string {
+		const originalPath = absolutePath;
+		const currentFile = view.file;
+		let finalPath = absolutePath;
+
+		// If original path was relative, make new path relative too
+		if (originalPath.startsWith('./') && currentFile) {
+			const newFile = this.app.vault.getAbstractFileByPath(absolutePath) as TFile | null;
+			if (newFile) {
+				const currentDir = currentFile.parent?.path || '';
+				const newFileDir = newFile.parent?.path || '';
+
+				if (newFileDir === currentDir) {
+					// Same directory - just filename
+					finalPath = './' + newFile.basename + '.' + newFile.extension;
+				} else if (currentDir && newFileDir.startsWith(currentDir + '/')) {
+					// New file is in subdirectory
+					const subPath = newFileDir.substring(currentDir.length + 1);
+					finalPath = './' + subPath + '/' + newFile.basename + '.' + newFile.extension;
+				} else {
+					// Different directory - calculate relative path
+					const currentParts = currentDir.split('/').filter(p => p);
+					const newParts = newFileDir.split('/').filter(p => p);
+
+					let commonLength = 0;
+					while (commonLength < currentParts.length && commonLength < newParts.length &&
+						   currentParts[commonLength] === newParts[commonLength]) {
+						commonLength++;
+					}
+
+					const upLevels = currentParts.length - commonLength;
+					const relativeParts = newParts.slice(commonLength);
+					const fileName = newFile.basename + '.' + newFile.extension;
+
+					if (upLevels === 0 && relativeParts.length === 0) {
+						finalPath = './' + fileName;
+					} else {
+						finalPath = '../'.repeat(upLevels) + relativeParts.join('/') + '/' + fileName;
+					}
+				}
+			}
+		} else if (!originalPath.startsWith('/') && !/^[A-Za-z]:/.test(originalPath) && !originalPath.startsWith('./') && currentFile) {
+			// Original was relative without ./ prefix - try to preserve format
+			const newFile = this.app.vault.getAbstractFileByPath(absolutePath) as TFile | null;
+			if (newFile) {
+				const currentDir = currentFile.parent?.path || '';
+				const newFileDir = newFile.parent?.path || '';
+
+				if (newFileDir === currentDir) {
+					finalPath = newFile.basename + '.' + newFile.extension;
+				}
+			}
+		}
+		return finalPath;
+	}
+
+	private buildReference(match: ImageMatch, newPath: string): string {
+		// Rebuild the reference string based on the match type
+		if (match.kind === 'markdown') {
+			return `![${match.alt}](${newPath})`;
+		} else if (match.kind === 'wikilink') {
+			return `![[${newPath}|${match.alt}]]`;
+		} else {
+			// HTML fallback
+			return `<img src="${newPath}" alt="${match.alt}">`;
+		}
 	}
 
 
@@ -436,78 +560,16 @@ export default class ImageRoundedFramePlugin extends Plugin {
 	}
 
 	private updateReference(editor: any, view: MarkdownView, match: ImageMatch, newPath: string): void {
-		const originalPath = match.path;
-		const currentFile = view.file;
-		let finalPath = newPath;
-		
-		// If original path was relative, make new path relative too
-		if (originalPath.startsWith('./') && currentFile) {
-			const newFile = this.app.vault.getAbstractFileByPath(newPath) as TFile | null;
-			if (newFile) {
-				const currentDir = currentFile.parent?.path || '';
-				const newFileDir = newFile.parent?.path || '';
-				
-				if (newFileDir === currentDir) {
-					// Same directory - just filename
-					finalPath = './' + newFile.basename + '.' + newFile.extension;
-				} else if (currentDir && newFileDir.startsWith(currentDir + '/')) {
-					// New file is in subdirectory
-					const subPath = newFileDir.substring(currentDir.length + 1);
-					finalPath = './' + subPath + '/' + newFile.basename + '.' + newFile.extension;
-				} else {
-					// Different directory - calculate relative path
-					const currentParts = currentDir.split('/').filter(p => p);
-					const newParts = newFileDir.split('/').filter(p => p);
-					
-					let commonLength = 0;
-					while (commonLength < currentParts.length && commonLength < newParts.length && 
-					       currentParts[commonLength] === newParts[commonLength]) {
-						commonLength++;
-					}
-					
-					const upLevels = currentParts.length - commonLength;
-					const relativeParts = newParts.slice(commonLength);
-					const fileName = newFile.basename + '.' + newFile.extension;
-					
-					if (upLevels === 0 && relativeParts.length === 0) {
-						finalPath = './' + fileName;
-					} else {
-						finalPath = '../'.repeat(upLevels) + relativeParts.join('/') + '/' + fileName;
-					}
-				}
-			}
-		} else if (!originalPath.startsWith('/') && !/^[A-Za-z]:/.test(originalPath) && !originalPath.startsWith('./') && currentFile) {
-			// Original was relative without ./ prefix - try to preserve format
-			const newFile = this.app.vault.getAbstractFileByPath(newPath) as TFile | null;
-			if (newFile) {
-				const currentDir = currentFile.parent?.path || '';
-				const newFileDir = newFile.parent?.path || '';
-				
-				if (newFileDir === currentDir) {
-					finalPath = newFile.basename + '.' + newFile.extension;
-				} else if (currentDir && newFileDir.startsWith(currentDir + '/')) {
-					finalPath = newFileDir.substring(currentDir.length + 1) + '/' + newFile.basename + '.' + newFile.extension;
-				}
-			}
-		}
-		
+		const finalPath = this.getRelativePathForNote(view, newPath);
+
 		// URL-encode path if it contains spaces (like original might have been)
+		const originalPath = match.path;
+		let processedPath = finalPath;
 		if (originalPath.includes('%20') || originalPath.includes(' ')) {
-			finalPath = finalPath.replace(/ /g, '%20');
+			processedPath = finalPath.replace(/ /g, '%20');
 		}
-		
-		let replacement = '';
-		switch (match.kind) {
-			case 'markdown':
-				replacement = `![${match.alt}](${finalPath})`;
-				break;
-			case 'wikilink':
-				replacement = match.alt && match.alt !== match.path ? `![[${finalPath}|${match.alt}]]` : `![[${finalPath}]]`;
-				break;
-			case 'html':
-				replacement = `<img src="${finalPath}" alt="${match.alt}">`;
-				break;
-		}
+
+		const replacement = this.buildReference(match, processedPath);
 		editor.replaceRange(replacement, { line: match.lineNumber, ch: match.start }, { line: match.lineNumber, ch: match.end });
 	}
 
