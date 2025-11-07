@@ -23,6 +23,7 @@ export interface RoundedFrameSettings {
 	enableBorder: boolean;
 	borderColor: string;
 	borderWidth: number;
+	borderStyle: 'solid' | 'dashed' | 'dotted';
 }
 
 export const DEFAULT_SETTINGS: RoundedFrameSettings = {
@@ -41,6 +42,7 @@ export const DEFAULT_SETTINGS: RoundedFrameSettings = {
 	enableBorder: false,
 	borderColor: '#cccccc',
 	borderWidth: 2,
+	borderStyle: 'solid',
 };
 
 export class RoundedFrameSettingTab extends PluginSettingTab {
@@ -194,6 +196,20 @@ export class RoundedFrameSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.borderWidth);
 				slider.onChange(async (value) => {
 					this.plugin.settings.borderWidth = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Border style')
+			.setDesc('Style of the border.')
+			.addDropdown((dropdown) => {
+				dropdown.addOption('solid', 'Solid');
+				dropdown.addOption('dashed', 'Dashed');
+				dropdown.addOption('dotted', 'Dotted');
+				dropdown.setValue(this.plugin.settings.borderStyle);
+				dropdown.onChange(async (value) => {
+					this.plugin.settings.borderStyle = value as 'solid' | 'dashed' | 'dotted';
 					await this.plugin.saveSettings();
 				});
 			});

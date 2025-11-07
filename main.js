@@ -60,7 +60,8 @@ var DEFAULT_SETTINGS = {
   shadowOffset: 5,
   enableBorder: false,
   borderColor: "#cccccc",
-  borderWidth: 2
+  borderWidth: 2,
+  borderStyle: "solid"
 };
 var RoundedFrameSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -152,6 +153,16 @@ var RoundedFrameSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
+    new import_obsidian.Setting(containerEl).setName("Border style").setDesc("Style of the border.").addDropdown((dropdown) => {
+      dropdown.addOption("solid", "Solid");
+      dropdown.addOption("dashed", "Dashed");
+      dropdown.addOption("dotted", "Dotted");
+      dropdown.setValue(this.plugin.settings.borderStyle);
+      dropdown.onChange(async (value) => {
+        this.plugin.settings.borderStyle = value;
+        await this.plugin.saveSettings();
+      });
+    });
   }
 };
 
@@ -197,7 +208,7 @@ var RoundedStyleManager = class {
 var import_obsidian2 = require("obsidian");
 var RoundedFrameModal = class extends import_obsidian2.Modal {
   constructor(app, opts) {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a, _b, _c, _d, _e, _f, _g, _h;
     super(app);
     this.opts = opts;
     this.undoStack = [];
@@ -213,7 +224,8 @@ var RoundedFrameModal = class extends import_obsidian2.Modal {
     this.border = {
       enabled: (_e = opts.enableBorder) != null ? _e : false,
       color: (_f = opts.borderColor) != null ? _f : "#cccccc",
-      width: (_g = opts.borderWidth) != null ? _g : 2
+      width: (_g = opts.borderWidth) != null ? _g : 2,
+      style: (_h = opts.borderStyle) != null ? _h : "solid"
     };
     this.saveState();
   }
@@ -233,6 +245,49 @@ var RoundedFrameModal = class extends import_obsidian2.Modal {
     });
     shadowToggle.classList.toggle("mod-cta", this.shadow.enabled);
     borderToggle.classList.toggle("mod-cta", this.border.enabled);
+    const shadowSection = contentEl.createDiv("rounded-frame-shadow-section");
+    shadowSection.style.display = this.shadow.enabled ? "block" : "none";
+    const shadowColorRow = shadowSection.createDiv("rounded-frame-control-row");
+    shadowColorRow.createSpan({ text: "Shadow Color: " });
+    const shadowColorInput = shadowColorRow.createEl("input", { type: "color" });
+    shadowColorInput.value = this.shadow.color;
+    const shadowBlurRow = shadowSection.createDiv("rounded-frame-control-row");
+    shadowBlurRow.createSpan({ text: "Blur: " });
+    const shadowBlurValue = shadowBlurRow.createSpan({ text: `${this.shadow.blur}px` });
+    const shadowBlurSlider = shadowBlurRow.createEl("input", { type: "range" });
+    shadowBlurSlider.min = "0";
+    shadowBlurSlider.max = "50";
+    shadowBlurSlider.step = "1";
+    shadowBlurSlider.value = String(this.shadow.blur);
+    const shadowOffsetRow = shadowSection.createDiv("rounded-frame-control-row");
+    shadowOffsetRow.createSpan({ text: "Offset: " });
+    const shadowOffsetValue = shadowOffsetRow.createSpan({ text: `${this.shadow.offset}px` });
+    const shadowOffsetSlider = shadowOffsetRow.createEl("input", { type: "range" });
+    shadowOffsetSlider.min = "0";
+    shadowOffsetSlider.max = "20";
+    shadowOffsetSlider.step = "1";
+    shadowOffsetSlider.value = String(this.shadow.offset);
+    const borderSection = contentEl.createDiv("rounded-frame-border-section");
+    borderSection.style.display = this.border.enabled ? "block" : "none";
+    const borderColorRow = borderSection.createDiv("rounded-frame-control-row");
+    borderColorRow.createSpan({ text: "Border Color: " });
+    const borderColorInput = borderColorRow.createEl("input", { type: "color" });
+    borderColorInput.value = this.border.color;
+    const borderWidthRow = borderSection.createDiv("rounded-frame-control-row");
+    borderWidthRow.createSpan({ text: "Width: " });
+    const borderWidthValue = borderWidthRow.createSpan({ text: `${this.border.width}px` });
+    const borderWidthSlider = borderWidthRow.createEl("input", { type: "range" });
+    borderWidthSlider.min = "1";
+    borderWidthSlider.max = "10";
+    borderWidthSlider.step = "1";
+    borderWidthSlider.value = String(this.border.width);
+    const borderStyleRow = borderSection.createDiv("rounded-frame-control-row");
+    borderStyleRow.createSpan({ text: "Style: " });
+    const borderStyleSelect = borderStyleRow.createEl("select");
+    const solidOption = borderStyleSelect.createEl("option", { text: "Solid", value: "solid" });
+    const dashedOption = borderStyleSelect.createEl("option", { text: "Dashed", value: "dashed" });
+    const dottedOption = borderStyleSelect.createEl("option", { text: "Dotted", value: "dotted" });
+    borderStyleSelect.value = this.border.style;
     const unitRow = contentEl.createDiv("rounded-frame-unit-row");
     const percentBtn = unitRow.createEl("button", { text: "Percent" });
     const pixelBtn = unitRow.createEl("button", { text: "Pixels" });
@@ -305,7 +360,7 @@ var RoundedFrameModal = class extends import_obsidian2.Modal {
             img.style.boxShadow = "";
           }
           if (this.border.enabled) {
-            img.style.border = `${this.border.width}px solid ${this.border.color}`;
+            img.style.border = `${this.border.width}px ${this.border.style} ${this.border.color}`;
           } else {
             img.style.border = "";
           }
@@ -327,12 +382,47 @@ var RoundedFrameModal = class extends import_obsidian2.Modal {
     shadowToggle.addEventListener("click", () => {
       this.shadow.enabled = !this.shadow.enabled;
       shadowToggle.classList.toggle("mod-cta", this.shadow.enabled);
+      shadowSection.style.display = this.shadow.enabled ? "block" : "none";
       this.saveState();
       syncUI();
     });
     borderToggle.addEventListener("click", () => {
       this.border.enabled = !this.border.enabled;
       borderToggle.classList.toggle("mod-cta", this.border.enabled);
+      borderSection.style.display = this.border.enabled ? "block" : "none";
+      this.saveState();
+      syncUI();
+    });
+    shadowColorInput.addEventListener("input", (evt) => {
+      this.shadow.color = evt.target.value;
+      this.saveState();
+      syncUI();
+    });
+    shadowBlurSlider.addEventListener("input", (evt) => {
+      this.shadow.blur = Number(evt.target.value);
+      shadowBlurValue.setText(`${this.shadow.blur}px`);
+      this.saveState();
+      syncUI();
+    });
+    shadowOffsetSlider.addEventListener("input", (evt) => {
+      this.shadow.offset = Number(evt.target.value);
+      shadowOffsetValue.setText(`${this.shadow.offset}px`);
+      this.saveState();
+      syncUI();
+    });
+    borderColorInput.addEventListener("input", (evt) => {
+      this.border.color = evt.target.value;
+      this.saveState();
+      syncUI();
+    });
+    borderWidthSlider.addEventListener("input", (evt) => {
+      this.border.width = Number(evt.target.value);
+      borderWidthValue.setText(`${this.border.width}px`);
+      this.saveState();
+      syncUI();
+    });
+    borderStyleSelect.addEventListener("change", (evt) => {
+      this.border.style = evt.target.value;
       this.saveState();
       syncUI();
     });
@@ -472,6 +562,7 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
           enableBorder: this.settings.enableBorder,
           borderColor: this.settings.borderColor,
           borderWidth: this.settings.borderWidth,
+          borderStyle: this.settings.borderStyle,
           onSubmit: (radius, unit, shadow, border) => this.applyRoundedFrameToMatches(view, unique, radius, unit, shadow, border)
         });
         modal.open();
@@ -505,6 +596,7 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
           enableBorder: this.settings.enableBorder,
           borderColor: this.settings.borderColor,
           borderWidth: this.settings.borderWidth,
+          borderStyle: this.settings.borderStyle,
           onSubmit: (radius, unit, shadow, border) => this.applyRoundedFrameToMatches(view, all, radius, unit, shadow, border)
         });
         modal.open();
@@ -546,7 +638,26 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
       return;
     const style = document.createElement("style");
     style.id = "rounded-frame-ui";
-    style.textContent = ".rounded-frame-modal{padding:20px;min-width:360px;}.rounded-frame-unit-row{display:flex;gap:8px;margin-bottom:12px;}.rounded-frame-unit-row button{flex:1;}.rounded-frame-section{margin-bottom:12px;}.rounded-frame-hidden{display:none;}.rounded-frame-slider{width:100%;}.rounded-frame-number{width:100%;}.rounded-frame-preview{text-align:center;margin:16px 0;}.rounded-frame-preview-img{max-width:220px;max-height:220px;border:2px solid var(--background-modifier-border);object-fit:contain;}.rounded-frame-button-row{display:flex;justify-content:flex-end;gap:10px;margin-top:16px;}";
+    style.textContent = `
+			.rounded-frame-modal{padding:20px;min-width:360px;}
+			.rounded-frame-effect-row{display:flex;gap:8px;margin-bottom:12px;}
+			.rounded-frame-effect-row button{flex:1;}
+			.rounded-frame-unit-row{display:flex;gap:8px;margin-bottom:12px;}
+			.rounded-frame-unit-row button{flex:1;}
+			.rounded-frame-section{margin-bottom:12px;}
+			.rounded-frame-hidden{display:none;}
+			.rounded-frame-slider{width:100%;}
+			.rounded-frame-number{width:100%;}
+			.rounded-frame-preview{text-align:center;margin:16px 0;}
+			.rounded-frame-preview-img{max-width:220px;max-height:220px;border:2px solid var(--background-modifier-border);object-fit:contain;}
+			.rounded-frame-button-row{display:flex;justify-content:flex-end;gap:10px;margin-top:16px;}
+			.rounded-frame-shadow-section, .rounded-frame-border-section{margin:12px 0;padding:12px;border:1px solid var(--background-modifier-border);border-radius:6px;}
+			.rounded-frame-control-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+			.rounded-frame-control-row span:first-child{min-width:80px;}
+			.rounded-frame-control-row input[type="color"]{width:40px;height:30px;border:none;border-radius:4px;cursor:pointer;}
+			.rounded-frame-control-row input[type="range"]{flex:1;}
+			.rounded-frame-control-row select{width:100px;}
+		`;
     document.head.appendChild(style);
   }
   async ensurePythonScript() {

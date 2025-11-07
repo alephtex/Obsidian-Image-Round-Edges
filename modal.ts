@@ -21,6 +21,7 @@ export interface ModalOptions {
 	enableBorder?: boolean;
 	borderColor?: string;
 	borderWidth?: number;
+	borderStyle?: 'solid' | 'dashed' | 'dotted';
 	onSubmit: (radius: number, unit: RadiusUnit, shadow?: ShadowOptions, border?: BorderOptions) => void;
 	onUndo?: () => void;
 	onRedo?: () => void;
@@ -37,6 +38,7 @@ export interface BorderOptions {
 	enabled: boolean;
 	color: string;
 	width: number;
+	style: 'solid' | 'dashed' | 'dotted';
 }
 
 export class RoundedFrameModal extends Modal {
@@ -61,6 +63,7 @@ export class RoundedFrameModal extends Modal {
 			enabled: opts.enableBorder ?? false,
 			color: opts.borderColor ?? '#cccccc',
 			width: opts.borderWidth ?? 2,
+			style: opts.borderStyle ?? 'solid',
 		};
 		this.saveState(); // Initial state for undo
 	}
@@ -85,6 +88,59 @@ export class RoundedFrameModal extends Modal {
 
 		shadowToggle.classList.toggle('mod-cta', this.shadow.enabled);
 		borderToggle.classList.toggle('mod-cta', this.border.enabled);
+
+		// Shadow controls section
+		const shadowSection = contentEl.createDiv('rounded-frame-shadow-section');
+		shadowSection.style.display = this.shadow.enabled ? 'block' : 'none';
+
+		const shadowColorRow = shadowSection.createDiv('rounded-frame-control-row');
+		shadowColorRow.createSpan({ text: 'Shadow Color: ' });
+		const shadowColorInput = shadowColorRow.createEl('input', { type: 'color' });
+		shadowColorInput.value = this.shadow.color;
+
+		const shadowBlurRow = shadowSection.createDiv('rounded-frame-control-row');
+		shadowBlurRow.createSpan({ text: 'Blur: ' });
+		const shadowBlurValue = shadowBlurRow.createSpan({ text: `${this.shadow.blur}px` });
+		const shadowBlurSlider = shadowBlurRow.createEl('input', { type: 'range' });
+		shadowBlurSlider.min = '0';
+		shadowBlurSlider.max = '50';
+		shadowBlurSlider.step = '1';
+		shadowBlurSlider.value = String(this.shadow.blur);
+
+		const shadowOffsetRow = shadowSection.createDiv('rounded-frame-control-row');
+		shadowOffsetRow.createSpan({ text: 'Offset: ' });
+		const shadowOffsetValue = shadowOffsetRow.createSpan({ text: `${this.shadow.offset}px` });
+		const shadowOffsetSlider = shadowOffsetRow.createEl('input', { type: 'range' });
+		shadowOffsetSlider.min = '0';
+		shadowOffsetSlider.max = '20';
+		shadowOffsetSlider.step = '1';
+		shadowOffsetSlider.value = String(this.shadow.offset);
+
+		// Border controls section
+		const borderSection = contentEl.createDiv('rounded-frame-border-section');
+		borderSection.style.display = this.border.enabled ? 'block' : 'none';
+
+		const borderColorRow = borderSection.createDiv('rounded-frame-control-row');
+		borderColorRow.createSpan({ text: 'Border Color: ' });
+		const borderColorInput = borderColorRow.createEl('input', { type: 'color' });
+		borderColorInput.value = this.border.color;
+
+		const borderWidthRow = borderSection.createDiv('rounded-frame-control-row');
+		borderWidthRow.createSpan({ text: 'Width: ' });
+		const borderWidthValue = borderWidthRow.createSpan({ text: `${this.border.width}px` });
+		const borderWidthSlider = borderWidthRow.createEl('input', { type: 'range' });
+		borderWidthSlider.min = '1';
+		borderWidthSlider.max = '10';
+		borderWidthSlider.step = '1';
+		borderWidthSlider.value = String(this.border.width);
+
+		const borderStyleRow = borderSection.createDiv('rounded-frame-control-row');
+		borderStyleRow.createSpan({ text: 'Style: ' });
+		const borderStyleSelect = borderStyleRow.createEl('select');
+		const solidOption = borderStyleSelect.createEl('option', { text: 'Solid', value: 'solid' });
+		const dashedOption = borderStyleSelect.createEl('option', { text: 'Dashed', value: 'dashed' });
+		const dottedOption = borderStyleSelect.createEl('option', { text: 'Dotted', value: 'dotted' });
+		borderStyleSelect.value = this.border.style;
 
 		const unitRow = contentEl.createDiv('rounded-frame-unit-row');
 		const percentBtn = unitRow.createEl('button', { text: 'Percent' });
@@ -179,7 +235,7 @@ export class RoundedFrameModal extends Modal {
 
 					// Apply border if enabled
 					if (this.border.enabled) {
-						img.style.border = `${this.border.width}px solid ${this.border.color}`;
+						img.style.border = `${this.border.width}px ${this.border.style} ${this.border.color}`;
 					} else {
 						img.style.border = '';
 					}
@@ -205,6 +261,7 @@ export class RoundedFrameModal extends Modal {
 		shadowToggle.addEventListener('click', () => {
 			this.shadow.enabled = !this.shadow.enabled;
 			shadowToggle.classList.toggle('mod-cta', this.shadow.enabled);
+			shadowSection.style.display = this.shadow.enabled ? 'block' : 'none';
 			this.saveState();
 			syncUI();
 		});
@@ -212,6 +269,48 @@ export class RoundedFrameModal extends Modal {
 		borderToggle.addEventListener('click', () => {
 			this.border.enabled = !this.border.enabled;
 			borderToggle.classList.toggle('mod-cta', this.border.enabled);
+			borderSection.style.display = this.border.enabled ? 'block' : 'none';
+			this.saveState();
+			syncUI();
+		});
+
+		// Shadow controls
+		shadowColorInput.addEventListener('input', (evt) => {
+			this.shadow.color = (evt.target as HTMLInputElement).value;
+			this.saveState();
+			syncUI();
+		});
+
+		shadowBlurSlider.addEventListener('input', (evt) => {
+			this.shadow.blur = Number((evt.target as HTMLInputElement).value);
+			shadowBlurValue.setText(`${this.shadow.blur}px`);
+			this.saveState();
+			syncUI();
+		});
+
+		shadowOffsetSlider.addEventListener('input', (evt) => {
+			this.shadow.offset = Number((evt.target as HTMLInputElement).value);
+			shadowOffsetValue.setText(`${this.shadow.offset}px`);
+			this.saveState();
+			syncUI();
+		});
+
+		// Border controls
+		borderColorInput.addEventListener('input', (evt) => {
+			this.border.color = (evt.target as HTMLInputElement).value;
+			this.saveState();
+			syncUI();
+		});
+
+		borderWidthSlider.addEventListener('input', (evt) => {
+			this.border.width = Number((evt.target as HTMLInputElement).value);
+			borderWidthValue.setText(`${this.border.width}px`);
+			this.saveState();
+			syncUI();
+		});
+
+		borderStyleSelect.addEventListener('change', (evt) => {
+			this.border.style = (evt.target as HTMLSelectElement).value as 'solid' | 'dashed' | 'dotted';
 			this.saveState();
 			syncUI();
 		});

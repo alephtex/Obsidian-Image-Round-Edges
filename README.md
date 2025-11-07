@@ -13,7 +13,15 @@ An Obsidian plugin that allows you to apply rounded corners to images in your no
 - Supports Markdown images, Wikilinks, and HTML img tags
 - Uses Python PIL/Pillow for robust image processing with Canvas API fallback
 
-### ✨ Latest Features (v1.2.0)
+### ✨ Latest Features (v1.3.0)
+
+- **Interactive Shadow Controls**: Color picker, blur slider, and offset slider with live preview
+- **Advanced Border Controls**: Color picker, width slider, and style selector (solid/dashed/dotted)
+- **Collapsible UI Sections**: Clean modal interface that expands when effects are enabled
+- **Real-time Updates**: All changes instantly reflected in image previews
+- **Enhanced Undo/Redo**: Supports all interactive control changes
+
+### ✨ Previous Major Features
 
 - **Referenced Image Detection**: Finds and processes images linked in your notes (Markdown, Wikilinks, HTML)
 - **Smart Path Resolution**: Handles complex paths, URL encoding, and relative references
@@ -21,10 +29,11 @@ An Obsidian plugin that allows you to apply rounded corners to images in your no
 - **Error Recovery**: Atomic operations prevent broken links and maintain note integrity
 
 - **Live Preview**: See all affected images simultaneously in the modal
-- **Shadow Effects**: Add customizable box shadows to images
-- **Border Effects**: Add customizable borders around images
+- **Advanced Shadow Effects**: Customizable box shadows with color, blur, and offset controls
+- **Advanced Border Effects**: Customizable borders with color, width, and style (solid/dashed/dotted)
+- **Interactive Controls**: Direct color pickers and sliders in the modal
 - **Undo/Redo**: Experimental undo/redo functionality in the modal
-- **Enhanced Settings**: Configure shadow and border defaults
+- **Enhanced Settings**: Configure all shadow and border defaults
 - **Bulk Processing**: Process all images in current subfolder or entire vault
 - **Referenced Image Detection**: Finds and processes images referenced in notes, not just physical files
 
@@ -157,6 +166,14 @@ If you encounter any issues or have questions:
 - Ensure you're using the latest version of the plugin
 
 ## Changelog
+
+### v1.3.0
+- Added interactive shadow controls: color picker, blur slider, offset slider
+- Added interactive border controls: color picker, width slider, style selector (solid/dashed/dotted)
+- Enhanced modal UI with collapsible sections for advanced controls
+- Added real-time preview updates for all shadow and border changes
+- Improved settings UI with border style dropdown
+- Added comprehensive undo/redo support for all interactive controls
 
 ### v1.2.0
 - Added comprehensive referenced image detection - finds images linked in notes, not just physical files

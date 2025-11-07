@@ -63,6 +63,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
                     enableBorder: this.settings.enableBorder,
                     borderColor: this.settings.borderColor,
                     borderWidth: this.settings.borderWidth,
+                    borderStyle: this.settings.borderStyle,
                     onSubmit: (radius, unit, shadow, border) => this.applyRoundedFrameToMatches(view, unique, radius, unit, shadow, border),
                 });
                 modal.open();
@@ -95,6 +96,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
                     enableBorder: this.settings.enableBorder,
                     borderColor: this.settings.borderColor,
                     borderWidth: this.settings.borderWidth,
+                    borderStyle: this.settings.borderStyle,
                     onSubmit: (radius, unit, shadow, border) => this.applyRoundedFrameToMatches(view, all, radius, unit, shadow, border),
                 });
                 modal.open();
@@ -144,7 +146,26 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		if (document.head.querySelector('#rounded-frame-ui')) return;
 		const style = document.createElement('style');
 		style.id = 'rounded-frame-ui';
-		style.textContent = '.rounded-frame-modal{padding:20px;min-width:360px;}.rounded-frame-unit-row{display:flex;gap:8px;margin-bottom:12px;}.rounded-frame-unit-row button{flex:1;}.rounded-frame-section{margin-bottom:12px;}.rounded-frame-hidden{display:none;}.rounded-frame-slider{width:100%;}.rounded-frame-number{width:100%;}.rounded-frame-preview{text-align:center;margin:16px 0;}.rounded-frame-preview-img{max-width:220px;max-height:220px;border:2px solid var(--background-modifier-border);object-fit:contain;}.rounded-frame-button-row{display:flex;justify-content:flex-end;gap:10px;margin-top:16px;}';
+		style.textContent = `
+			.rounded-frame-modal{padding:20px;min-width:360px;}
+			.rounded-frame-effect-row{display:flex;gap:8px;margin-bottom:12px;}
+			.rounded-frame-effect-row button{flex:1;}
+			.rounded-frame-unit-row{display:flex;gap:8px;margin-bottom:12px;}
+			.rounded-frame-unit-row button{flex:1;}
+			.rounded-frame-section{margin-bottom:12px;}
+			.rounded-frame-hidden{display:none;}
+			.rounded-frame-slider{width:100%;}
+			.rounded-frame-number{width:100%;}
+			.rounded-frame-preview{text-align:center;margin:16px 0;}
+			.rounded-frame-preview-img{max-width:220px;max-height:220px;border:2px solid var(--background-modifier-border);object-fit:contain;}
+			.rounded-frame-button-row{display:flex;justify-content:flex-end;gap:10px;margin-top:16px;}
+			.rounded-frame-shadow-section, .rounded-frame-border-section{margin:12px 0;padding:12px;border:1px solid var(--background-modifier-border);border-radius:6px;}
+			.rounded-frame-control-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+			.rounded-frame-control-row span:first-child{min-width:80px;}
+			.rounded-frame-control-row input[type="color"]{width:40px;height:30px;border:none;border-radius:4px;cursor:pointer;}
+			.rounded-frame-control-row input[type="range"]{flex:1;}
+			.rounded-frame-control-row select{width:100px;}
+		`;
 		document.head.appendChild(style);
 	}
 
