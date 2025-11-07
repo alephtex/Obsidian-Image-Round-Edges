@@ -511,6 +511,77 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
         return true;
       }
     });
+    this.addCommand({
+      id: "rounded-frame-process-subfolder",
+      name: "Rounded frame: process all images in current subfolder",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
+        if (!view || !view.file)
+          return false;
+        if (checking)
+          return true;
+        const subfolderImages = this.getImagesInCurrentSubfolder(view);
+        if (subfolderImages.length === 0) {
+          new import_obsidian3.Notice("No images found in current subfolder", 2e3);
+          return false;
+        }
+        const modal = new RoundedFrameModal(this.app, {
+          initialRadius: this.settings.defaultPercent,
+          initialUnit: this.settings.defaultUnit,
+          defaultPercent: this.settings.defaultPercent,
+          defaultPx: this.settings.defaultPx,
+          imageSources: [],
+          // No preview for bulk operations
+          enableShadow: this.settings.enableShadow,
+          shadowColor: this.settings.shadowColor,
+          shadowBlur: this.settings.shadowBlur,
+          shadowOffset: this.settings.shadowOffset,
+          enableBorder: this.settings.enableBorder,
+          borderColor: this.settings.borderColor,
+          borderWidth: this.settings.borderWidth,
+          onSubmit: async (radius, unit, shadow, border) => {
+            await this.processBulkImages(view, subfolderImages, radius, unit, shadow, border);
+            new import_obsidian3.Notice(`Processed ${subfolderImages.length} images in subfolder`, 3e3);
+          }
+        });
+        modal.open();
+        return true;
+      }
+    });
+    this.addCommand({
+      id: "rounded-frame-process-vault",
+      name: "Rounded frame: process all images in vault",
+      checkCallback: (checking) => {
+        if (checking)
+          return true;
+        const vaultImages = this.getImagesInVault();
+        if (vaultImages.length === 0) {
+          new import_obsidian3.Notice("No images found in vault", 2e3);
+          return false;
+        }
+        const modal = new RoundedFrameModal(this.app, {
+          initialRadius: this.settings.defaultPercent,
+          initialUnit: this.settings.defaultUnit,
+          defaultPercent: this.settings.defaultPercent,
+          defaultPx: this.settings.defaultPx,
+          imageSources: [],
+          // No preview for bulk operations
+          enableShadow: this.settings.enableShadow,
+          shadowColor: this.settings.shadowColor,
+          shadowBlur: this.settings.shadowBlur,
+          shadowOffset: this.settings.shadowOffset,
+          enableBorder: this.settings.enableBorder,
+          borderColor: this.settings.borderColor,
+          borderWidth: this.settings.borderWidth,
+          onSubmit: async (radius, unit, shadow, border) => {
+            await this.processBulkImages(null, vaultImages, radius, unit, shadow, border);
+            new import_obsidian3.Notice(`Processed ${vaultImages.length} images in vault`, 3e3);
+          }
+        });
+        modal.open();
+        return true;
+      }
+    });
   }
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -658,6 +729,64 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
       }
     }
     this.storeLast(radius, unit);
+  }
+  getImagesInCurrentSubfolder(view) {
+    if (!view.file)
+      return [];
+    const currentFile = view.file;
+    const currentFolder = currentFile.parent;
+    if (!currentFolder)
+      return [];
+    return this.getImageFilesInFolder(currentFolder);
+  }
+  getImagesInVault() {
+    const rootFolder = this.app.vault.getRoot();
+    return this.getImageFilesInFolder(rootFolder);
+  }
+  getImageFilesInFolder(folder) {
+    const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
+    const images = [];
+    for (const item of folder.children) {
+      if (item instanceof import_obsidian3.TFile) {
+        const extension = item.extension.toLowerCase();
+        if (imageExtensions.includes(extension)) {
+          images.push(item);
+        }
+      }
+    }
+    for (const item of folder.children) {
+      if (item instanceof import_obsidian3.TFolder) {
+        images.push(...this.getImageFilesInFolder(item));
+      }
+    }
+    return images;
+  }
+  async processBulkImages(view, imageFiles, radius, unit, shadow, border) {
+    this.style.updateStyles(radius, unit, shadow, border);
+    let processedCount = 0;
+    const totalCount = imageFiles.length;
+    for (const imageFile of imageFiles) {
+      try {
+        const virtualMatch = {
+          lineNumber: 0,
+          start: 0,
+          end: imageFile.basename.length,
+          path: imageFile.path,
+          alt: imageFile.basename,
+          raw: imageFile.basename,
+          kind: "markdown"
+        };
+        const { blob, newPath } = await this.roundImageFile(imageFile, radius, unit);
+        await this.writeRoundedVersion(newPath, blob);
+        processedCount++;
+        if (processedCount % 10 === 0 || processedCount === totalCount) {
+          new import_obsidian3.Notice(`Processed ${processedCount}/${totalCount} images`, 1e3);
+        }
+      } catch (err) {
+        console.error(`Failed to process image ${imageFile.path}:`, err);
+      }
+    }
+    new import_obsidian3.Notice(`Bulk processing complete: ${processedCount}/${totalCount} images processed`, 3e3);
   }
   getRelativePathForNote(view, absolutePath) {
     var _a, _b, _c, _d;

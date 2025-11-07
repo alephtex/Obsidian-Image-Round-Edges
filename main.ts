@@ -4,7 +4,7 @@
 // 4. Present a modal that lets the user pick radius/unit with immediate visual feedback and easy resets.
 // 5. Replace the chosen source with an <img> that uses reusable CSS classes for consistent rounded styling.
 
-import { Plugin, MarkdownView, Menu, TFile, Notice } from 'obsidian';
+import { Plugin, MarkdownView, Menu, TFile, TFolder, Notice } from 'obsidian';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as path from 'path';
@@ -96,6 +96,81 @@ export default class ImageRoundedFramePlugin extends Plugin {
                     borderColor: this.settings.borderColor,
                     borderWidth: this.settings.borderWidth,
                     onSubmit: (radius, unit, shadow, border) => this.applyRoundedFrameToMatches(view, all, radius, unit, shadow, border),
+                });
+                modal.open();
+                return true;
+            },
+        });
+
+        // Command: process all images in current subfolder
+        this.addCommand({
+            id: 'rounded-frame-process-subfolder',
+            name: 'Rounded frame: process all images in current subfolder',
+            checkCallback: (checking) => {
+                const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+                if (!view || !view.file) return false;
+
+                if (checking) return true; // Always available if there's an active view
+
+                const subfolderImages = this.getImagesInCurrentSubfolder(view);
+                if (subfolderImages.length === 0) {
+                    new Notice('No images found in current subfolder', 2000);
+                    return false;
+                }
+
+                const modal = new RoundedFrameModal(this.app, {
+                    initialRadius: this.settings.defaultPercent,
+                    initialUnit: this.settings.defaultUnit,
+                    defaultPercent: this.settings.defaultPercent,
+                    defaultPx: this.settings.defaultPx,
+                    imageSources: [], // No preview for bulk operations
+                    enableShadow: this.settings.enableShadow,
+                    shadowColor: this.settings.shadowColor,
+                    shadowBlur: this.settings.shadowBlur,
+                    shadowOffset: this.settings.shadowOffset,
+                    enableBorder: this.settings.enableBorder,
+                    borderColor: this.settings.borderColor,
+                    borderWidth: this.settings.borderWidth,
+                    onSubmit: async (radius, unit, shadow, border) => {
+                        await this.processBulkImages(view, subfolderImages, radius, unit, shadow, border);
+                        new Notice(`Processed ${subfolderImages.length} images in subfolder`, 3000);
+                    },
+                });
+                modal.open();
+                return true;
+            },
+        });
+
+        // Command: process all images in vault
+        this.addCommand({
+            id: 'rounded-frame-process-vault',
+            name: 'Rounded frame: process all images in vault',
+            checkCallback: (checking) => {
+                if (checking) return true; // Always available
+
+                const vaultImages = this.getImagesInVault();
+                if (vaultImages.length === 0) {
+                    new Notice('No images found in vault', 2000);
+                    return false;
+                }
+
+                const modal = new RoundedFrameModal(this.app, {
+                    initialRadius: this.settings.defaultPercent,
+                    initialUnit: this.settings.defaultUnit,
+                    defaultPercent: this.settings.defaultPercent,
+                    defaultPx: this.settings.defaultPx,
+                    imageSources: [], // No preview for bulk operations
+                    enableShadow: this.settings.enableShadow,
+                    shadowColor: this.settings.shadowColor,
+                    shadowBlur: this.settings.shadowBlur,
+                    shadowOffset: this.settings.shadowOffset,
+                    enableBorder: this.settings.enableBorder,
+                    borderColor: this.settings.borderColor,
+                    borderWidth: this.settings.borderWidth,
+                    onSubmit: async (radius, unit, shadow, border) => {
+                        await this.processBulkImages(null, vaultImages, radius, unit, shadow, border);
+                        new Notice(`Processed ${vaultImages.length} images in vault`, 3000);
+                    },
                 });
                 modal.open();
                 return true;
@@ -267,6 +342,82 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		}
 
 		this.storeLast(radius, unit);
+	}
+
+	private getImagesInCurrentSubfolder(view: MarkdownView): TFile[] {
+		if (!view.file) return [];
+
+		const currentFile = view.file;
+		const currentFolder = currentFile.parent;
+		if (!currentFolder) return [];
+
+		return this.getImageFilesInFolder(currentFolder);
+	}
+
+	private getImagesInVault(): TFile[] {
+		const rootFolder = this.app.vault.getRoot();
+		return this.getImageFilesInFolder(rootFolder);
+	}
+
+	private getImageFilesInFolder(folder: TFolder): TFile[] {
+		const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
+		const images: TFile[] = [];
+
+		// Add images from current folder
+		for (const item of folder.children) {
+			if (item instanceof TFile) {
+				const extension = item.extension.toLowerCase();
+				if (imageExtensions.includes(extension)) {
+					images.push(item);
+				}
+			}
+		}
+
+		// Recursively add images from subfolders
+		for (const item of folder.children) {
+			if (item instanceof TFolder) {
+				images.push(...this.getImageFilesInFolder(item));
+			}
+		}
+
+		return images;
+	}
+
+	private async processBulkImages(view: MarkdownView | null, imageFiles: TFile[], radius: number, unit: RadiusUnit, shadow?: ShadowOptions, border?: BorderOptions): Promise<void> {
+		this.style.updateStyles(radius, unit, shadow, border);
+
+		let processedCount = 0;
+		const totalCount = imageFiles.length;
+
+		for (const imageFile of imageFiles) {
+			try {
+				// Create a virtual "match" for bulk processing
+				const virtualMatch: ImageMatch = {
+					lineNumber: 0,
+					start: 0,
+					end: imageFile.basename.length,
+					path: imageFile.path,
+					alt: imageFile.basename,
+					raw: imageFile.basename,
+					kind: 'markdown'
+				};
+
+				const { blob, newPath } = await this.roundImageFile(imageFile, radius, unit);
+				await this.writeRoundedVersion(newPath, blob);
+
+				// For bulk operations, we don't update references in notes since there are no references to update
+				// The images are just processed and saved with rounded versions
+
+				processedCount++;
+				if (processedCount % 10 === 0 || processedCount === totalCount) {
+					new Notice(`Processed ${processedCount}/${totalCount} images`, 1000);
+				}
+			} catch (err) {
+				console.error(`Failed to process image ${imageFile.path}:`, err);
+			}
+		}
+
+		new Notice(`Bulk processing complete: ${processedCount}/${totalCount} images processed`, 3000);
 	}
 
 	private getRelativePathForNote(view: MarkdownView, absolutePath: string): string {

@@ -20,6 +20,7 @@ An Obsidian plugin that allows you to apply rounded corners to images in your no
 - **Border Effects**: Add customizable borders around images
 - **Undo/Redo**: Experimental undo/redo functionality in the modal
 - **Enhanced Settings**: Configure shadow and border defaults
+- **Bulk Processing**: Process all images in current subfolder or entire vault
 
 ## Requirements
 
@@ -43,6 +44,15 @@ When you run a command, a modal will appear allowing you:
 - Enter pixel values directly
 - See a live preview of the rounded image
 - Apply or reset the changes
+
+## Bulk Processing
+
+The plugin also supports bulk processing of multiple images:
+
+- **Command: "Rounded frame: process all images in current subfolder"** - Processes all images in the same folder as your current note
+- **Command: "Rounded frame: process all images in vault"** - Processes all images in your entire Obsidian vault
+
+These commands will apply the same radius, shadow, and border settings to all found images. Images are processed in their original folders and saved with rounded versions alongside the originals.
 
 ## Settings
 
@@ -109,6 +119,15 @@ If you encounter any issues or have questions:
 - Ensure you're using the latest version of the plugin
 
 ## Changelog
+
+### v1.1.0
+- Added live preview showing all affected images simultaneously
+- Added shadow effects with customizable color, blur, and offset
+- Added border effects with customizable color and width
+- Added undo/redo functionality in modal
+- Added bulk processing commands for subfolder and vault-wide image processing
+- Improved multi-image reference updating with correct position handling
+- Enhanced settings UI with shadow and border configuration
 
 ### v1.0.0
 - Initial release
