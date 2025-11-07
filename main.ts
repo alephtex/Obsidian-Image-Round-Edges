@@ -10,6 +10,183 @@ import { promisify } from 'util';
 import * as path from 'path';
 import * as fs from 'fs';
 
+const PY_ROUND_IMAGE = `#!/usr/bin/env python3
+# 1. Load image from input path
+# 2. Calculate symmetric border radius based on smaller dimension
+# 3. Create rounded corners mask with transparency
+# 4. Apply shadow effect if enabled
+# 5. Apply border effect if enabled
+# 6. Composite all effects
+# 7. Save result as PNG with transparency
+
+import sys
+from PIL import Image, ImageDraw, ImageFilter
+import math
+
+def hex_to_rgb(hex_color):
+    """Convert hex color string to RGB tuple"""
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+
+def apply_effects(input_path, output_path, radius_value, unit,
+                  shadow_enabled=False, shadow_color="#000000", shadow_blur=10, shadow_offset=5,
+                  border_enabled=False, border_color="#cccccc", border_width=2, border_style="solid"):
+    # Load image
+    img = Image.open(input_path).convert("RGBA")
+    w, h = img.size
+
+    # Calculate radius
+    base_dimension = min(w, h)
+    max_radius = base_dimension / 2
+
+    if unit == 'percent':
+        radius_px = (radius_value / 100) * base_dimension
+    else:
+        radius_px = radius_value
+
+    radius_px = min(radius_px, max_radius)
+    radius_px = max(0, radius_px)
+
+    # Create the final canvas (larger if shadow or border is enabled)
+    shadow_padding = shadow_blur + shadow_offset + 10 if shadow_enabled else 0
+    border_padding = border_width if border_enabled else 0
+    canvas_padding = shadow_padding + border_padding
+    canvas_w = w + canvas_padding * 2
+    canvas_h = h + canvas_padding * 2
+    canvas = Image.new('RGBA', (0 + canvas_w, 0 + canvas_h), (0, 0, 0, 0))
+
+    # Position of original image on canvas (centered with padding)
+    img_x = canvas_padding
+    img_y = canvas_padding
+
+    # Create mask for rounded corners
+    mask = Image.new('L', (w, h), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.rounded_rectangle([(0, 0), (w, h)], radius=int(radius_px), fill=255)
+
+    # Apply rounded corners to image
+    rounded_img = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+    rounded_img.paste(img, (0, 0), mask)
+
+    # Apply shadow if enabled
+    if shadow_enabled:
+        # Create shadow
+        shadow = Image.new('RGBA', (w, h), hex_to_rgb(shadow_color) + (255,))
+        shadow.putalpha(mask)
+
+        # Apply blur to shadow
+        shadow = shadow.filter(ImageFilter.GaussianBlur(shadow_blur))
+
+        # Position shadow on canvas (accounting for border padding)
+        shadow_x = img_x + shadow_offset
+        shadow_y = img_y + shadow_offset
+        canvas.paste(shadow, (shadow_x, shadow_y), shadow)
+
+    # First, paste the rounded image
+    canvas.paste(rounded_img, (img_x, img_y), mask)
+
+    # Apply border AFTER rounding if enabled (so it appears outside the rounded corners)
+    if border_enabled:
+        # Create border on the full canvas size
+        border_canvas = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
+        border_draw = ImageDraw.Draw(border_canvas)
+
+        # Calculate border position (outside the rounded image area)
+        border_x = img_x - border_width
+        border_y = img_y - border_width
+        border_w = w + border_width * 2
+        border_h = h + border_width * 2
+
+        # Draw the outer border shape (larger rounded rectangle)
+        if border_style == "solid":
+            border_draw.rounded_rectangle([border_x, border_y, border_x + border_w, border_y + border_h],
+                                        radius=int(radius_px + border_width), fill=hex_to_rgb(border_color) + (255,))
+        elif border_style == "dashed":
+            # For dashed, we'll draw multiple rounded rectangles with gaps
+            # This is a simplified dashed implementation
+            dash_length = border_width * 3
+            gap_length = border_width * 2
+            for i in range(0, int(border_w + border_h), dash_length + gap_length):
+                # Draw dashes along the perimeter (simplified)
+                if i < border_w:
+                    # Top dash
+                    border_draw.rounded_rectangle([border_x + i, border_y, border_x + min(i + dash_length, border_w), border_y + border_width],
+                                                radius=max(0, int(radius_px + border_width) - i) if i < radius_px + border_width else 0,
+                                                fill=hex_to_rgb(border_color) + (255,))
+                # Add more complex dashed logic for full perimeter if needed
+        else:  # dotted - similar to dashed but smaller
+            dot_length = border_width
+            gap_length = border_width * 2
+            for i in range(0, int(border_w + border_h), dot_length + gap_length):
+                if i < border_w:
+                    border_draw.rounded_rectangle([border_x + i, border_y, border_x + min(i + dot_length, border_w), border_y + border_width],
+                                                radius=max(0, int(radius_px + border_width) - i) if i < radius_px + border_width else 0,
+                                                fill=hex_to_rgb(border_color) + (255,))
+
+        # Create mask for the inner area (where the rounded image is) to cut out from border
+        inner_mask = Image.new('L', (canvas_w, canvas_h), 0)
+        inner_draw = ImageDraw.Draw(inner_mask)
+        inner_draw.rounded_rectangle([img_x, img_y, img_x + w, img_y + h], radius=int(radius_px), fill=255)
+
+        # Apply the inner mask to remove border from inside the rounded image area
+        border_canvas.putalpha(Image.composite(Image.new('L', (canvas_w, canvas_h), 255), Image.new('L', (canvas_w, canvas_h), 0), inner_mask))
+
+        # Composite border onto canvas
+        canvas = Image.alpha_composite(canvas, border_canvas)
+
+    # Save as PNG
+    canvas.save(output_path, 'PNG')
+    return True
+
+def round_image(input_path, output_path, radius_value, unit):
+    # Legacy function for backward compatibility
+    return apply_effects(input_path, output_path, radius_value, unit)
+
+if __name__ == '__main__':
+    # Support both old and new argument formats for backward compatibility
+    if len(sys.argv) == 5:
+        # Legacy format: input_path, output_path, radius_value, unit
+        input_path = sys.argv[1]
+        output_path = sys.argv[2]
+        radius_value = float(sys.argv[3])
+        unit = sys.argv[4]
+
+        try:
+            round_image(input_path, output_path, radius_value, unit)
+            print("SUCCESS")
+        except Exception as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+    elif len(sys.argv) >= 13:
+        # New format with effects: input_path, output_path, radius_value, unit,
+        # shadow_enabled, shadow_color, shadow_blur, shadow_offset,
+        # border_enabled, border_color, border_width, border_style
+        input_path = sys.argv[1]
+        output_path = sys.argv[2]
+        radius_value = float(sys.argv[3])
+        unit = sys.argv[4]
+        shadow_enabled = sys.argv[5].lower() == 'true'
+        shadow_color = sys.argv[6]
+        shadow_blur = int(sys.argv[7])
+        shadow_offset = int(sys.argv[8])
+        border_enabled = sys.argv[9].lower() == 'true'
+        border_color = sys.argv[10]
+        border_width = int(sys.argv[11])
+        border_style = sys.argv[12]
+
+        try:
+            apply_effects(input_path, output_path, radius_value, unit,
+                         shadow_enabled, shadow_color, shadow_blur, shadow_offset,
+                         border_enabled, border_color, border_width, border_style)
+            print("SUCCESS")
+        except Exception as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print("ERROR: Invalid number of arguments", file=sys.stderr)
+        sys.exit(1)
+`;
+
 const execAsync = promisify(exec);
 import { RoundedFrameSettings, DEFAULT_SETTINGS, RoundedFrameSettingTab, RadiusUnit } from './settings';
 import { RoundedStyleManager } from './style-manager';
@@ -17,9 +194,22 @@ import { RoundedFrameModal, ShadowOptions, BorderOptions } from './modal';
 
 interface ImageMatch { lineNumber: number; start: number; end: number; path: string; alt: string; raw: string; kind: 'markdown' | 'wikilink' | 'html'; }
 
+interface LastAction {
+	originalPaths: string[];     // Original image paths
+	backupPaths: string[];       // Backup paths in hidden folder
+	localBackupPaths: string[];  // Local backup paths in same folder
+	newPaths: string[];          // New processed image paths
+	notePath: string;            // Path to the note that was modified
+	timestamp: number;           // When the action was performed
+}
+
 export default class ImageRoundedFramePlugin extends Plugin {
 	settings!: RoundedFrameSettings;
 	private style = new RoundedStyleManager();
+	private lastAction: LastAction | null = null;
+	private readonly BACKUP_FOLDER = '.obsidian-image-round-edges-backups';
+	private progressPopup: HTMLElement | null = null;
+	private readonly DEBUG_LOG_PATH = 'image-rounded-frame-debug.log';
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -31,12 +221,17 @@ export default class ImageRoundedFramePlugin extends Plugin {
         this.addCommand({
             id: 'rounded-frame-apply-visible',
             name: 'Rounded frame: apply to visible images',
-            checkCallback: (checking) => {
+            callback: () => {
                 const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-                if (!view) return false;
+                if (!view) {
+                    new Notice('Open a note to use this command', 2000);
+                    return;
+                }
                 const visible = this.getVisibleImages(view);
-                if (checking) return visible.length > 0;
-                if (visible.length === 0) return false;
+                if (visible.length === 0) {
+                    new Notice('No visible images found in the active note', 2000);
+                    return;
+                }
 
                 const matches: ImageMatch[] = [];
                 for (const img of visible) {
@@ -45,9 +240,11 @@ export default class ImageRoundedFramePlugin extends Plugin {
                     if (m) matches.push(m);
                 }
                 const unique = this.uniqueMatches(matches);
-                if (unique.length === 0) return false;
+                if (unique.length === 0) {
+                    new Notice('Could not resolve image references in this note', 2000);
+                    return;
+                }
 
-                const first = visible[0];
                 const imageSources = visible.map(img => img.getAttribute('src') || img.getAttribute('data-src') || '').filter(src => src);
                 const initial = this.getInitialRadius();
                 const modal = new RoundedFrameModal(this.app, {
@@ -67,7 +264,6 @@ export default class ImageRoundedFramePlugin extends Plugin {
                     onSubmit: (radius, unit, shadow, border) => this.applyRoundedFrameToMatches(view, unique, radius, unit, shadow, border),
                 });
                 modal.open();
-                return true;
             },
         });
 
@@ -75,12 +271,17 @@ export default class ImageRoundedFramePlugin extends Plugin {
         this.addCommand({
             id: 'rounded-frame-apply-all',
             name: 'Rounded frame: apply to all images in note',
-            checkCallback: (checking) => {
+            callback: () => {
                 const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-                if (!view) return false;
+                if (!view) {
+                    new Notice('Open a note to use this command', 2000);
+                    return;
+                }
                 const all = this.getAllMatches(view);
-                if (checking) return all.length > 0;
-                if (all.length === 0) return false;
+                if (all.length === 0) {
+                    new Notice('No image references found in this note', 2000);
+                    return;
+                }
 
                 const initial = this.getInitialRadius();
                 const modal = new RoundedFrameModal(this.app, {
@@ -100,7 +301,6 @@ export default class ImageRoundedFramePlugin extends Plugin {
                     onSubmit: (radius, unit, shadow, border) => this.applyRoundedFrameToMatches(view, all, radius, unit, shadow, border),
                 });
                 modal.open();
-                return true;
             },
         });
 
@@ -108,15 +308,14 @@ export default class ImageRoundedFramePlugin extends Plugin {
         this.addCommand({
             id: 'rounded-frame-process-subfolder',
             name: 'Rounded frame: process all images in current subfolder',
-            checkCallback: (checking) => {
+            callback: () => {
                 const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-                if (!view || !view.file) return false;
-
-                if (checking) return true; // Always available if there's an active view
-
+                if (!view || !view.file) {
+                    new Notice('Open a note inside the target folder to use this', 3000);
+                    return;
+                }
                 // Process asynchronously
                 this.processSubfolderImages(view);
-                return true;
             },
         });
 
@@ -124,12 +323,56 @@ export default class ImageRoundedFramePlugin extends Plugin {
         this.addCommand({
             id: 'rounded-frame-process-vault',
             name: 'Rounded frame: process all images in vault',
-            checkCallback: (checking) => {
-                if (checking) return true; // Always available
-
+            callback: () => {
                 // Process asynchronously
                 this.processVaultImages();
-                return true;
+            },
+        });
+
+        // Command: undo last action
+        this.addCommand({
+            id: 'rounded-frame-undo-last',
+            name: 'Rounded frame: undo last action',
+            callback: () => {
+                if (!this.lastAction) {
+                    new Notice('No action to undo', 2000);
+                    return;
+                }
+                this.undoLastAction();
+            },
+        });
+
+        // Command: confirm last action
+        this.addCommand({
+            id: 'rounded-frame-confirm-last',
+            name: 'Rounded frame: confirm last action',
+            callback: () => {
+                if (!this.lastAction) {
+                    new Notice('No action to confirm', 2000);
+                    return;
+                }
+                this.confirmLastAction();
+            },
+        });
+
+        // Command: emergency recovery - scan for backup files
+        this.addCommand({
+            id: 'rounded-frame-emergency-recovery',
+            name: 'Rounded frame: emergency recovery (scan for backups)',
+            callback: () => {
+                this.emergencyRecoveryScan();
+            },
+        });
+
+        // Command: force cleanup all backups
+        this.addCommand({
+            id: 'rounded-frame-cleanup-backups',
+            name: 'Rounded frame: cleanup all backup files',
+            callback: async () => {
+                const confirmed = confirm('This will permanently delete ALL backup files in your vault. This action cannot be undone. Continue?');
+                if (confirmed) {
+                    await this.forceCleanupAllBackups();
+                }
             },
         });
 	}
@@ -140,6 +383,11 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+	}
+
+	async onunload(): Promise<void> {
+		// Clean up any active confirmation popup
+		this.removeActionConfirmationPopup();
 	}
 
 	private ensureUiStyles(): void {
@@ -182,11 +430,23 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			fs.mkdirSync(pluginDir, { recursive: true });
 		}
 		
-		// Copy script from plugin directory if it exists
-		const sourceScript = path.join(__dirname, 'round_image.py');
-		if (fs.existsSync(sourceScript) && !fs.existsSync(pythonScript)) {
-			fs.copyFileSync(sourceScript, pythonScript);
-			fs.chmodSync(pythonScript, 0o755);
+		// If script missing or too small, (re)write embedded version
+		let shouldWrite = false;
+		try {
+			if (!fs.existsSync(pythonScript)) shouldWrite = true;
+			else {
+				const stat = fs.statSync(pythonScript);
+				if (stat.size < 5000) shouldWrite = true; // ensure full script present
+			}
+		} catch { shouldWrite = true; }
+		
+		if (shouldWrite) {
+			try {
+				fs.writeFileSync(pythonScript, PY_ROUND_IMAGE, { encoding: 'utf-8' });
+				fs.chmodSync(pythonScript, 0o755);
+			} catch (e) {
+				console.warn('Failed to materialize embedded python script:', e);
+			}
 		}
 	}
 
@@ -269,90 +529,9 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			return b.start - a.start; // Process later positions first in same line
 		});
 
-		// Update styles once for all images
-		this.style.updateStyles(radius, unit, shadow, border);
-
-		// Process all images and collect the updates
-		const updates: Array<{match: ImageMatch, newPath: string, success: boolean}> = [];
-
-		for (const m of refreshed) {
-			try {
-				const file = this.resolveTFile(view, m.path);
-				if (!file) {
-					new Notice(`Could not find file: ${m.path}`, 2000);
-					continue;
-				}
-
-				const { blob, newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
-				await this.writeRoundedVersion(newPath, blob);
-
-				// Verify the file was actually written and is accessible
-				try {
-					const writtenFile = this.app.vault.getAbstractFileByPath(newPath);
-					if (writtenFile && writtenFile instanceof TFile && writtenFile.stat.size > 0) {
-						updates.push({ match: m, newPath, success: true });
-					} else {
-						console.error(`Failed to verify written file: ${newPath}`);
-						updates.push({ match: m, newPath: '', success: false });
-					}
-				} catch (error) {
-					console.error(`Error verifying written file ${newPath}:`, error);
-					updates.push({ match: m, newPath: '', success: false });
-				}
-			} catch (err) {
-				new Notice(`Failed to round image: ${m.path} - ${err}`, 3000);
-				updates.push({ match: m, newPath: '', success: false });
-			}
-		}
-
-		// Apply all reference updates at once (this helps with position management)
-		let positionOffset = 0;
-		const sortedUpdates = updates.sort((a, b) => {
-			if (a.match.lineNumber !== b.match.lineNumber) {
-				return a.match.lineNumber - b.match.lineNumber;
-			}
-			return a.match.start - b.match.start;
-		});
-
-		for (const update of sortedUpdates) {
-			if (update.success) {
-				// Verify the processed image actually exists before updating reference
-				try {
-					const processedFile = this.app.vault.getAbstractFileByPath(update.newPath);
-					if (!processedFile || !(processedFile instanceof TFile)) {
-						console.warn(`Processed image not found at ${update.newPath}, skipping reference update`);
-						continue;
-					}
-
-					// Double-check file size is reasonable (not empty/corrupted)
-					if (processedFile.stat.size === 0) {
-						console.warn(`Processed image ${update.newPath} is empty, skipping reference update`);
-						continue;
-					}
-
-					// Adjust position based on previous updates in the same line
-					const adjustedMatch = {
-						...update.match,
-						start: update.match.start + positionOffset,
-						end: update.match.end + positionOffset
-					};
-					this.updateReference(editor, view, adjustedMatch, update.newPath);
-					new Notice(`Rounded image saved: ${update.newPath}`, 1500);
-
-					// Calculate position offset for next updates in same line
-					const oldLength = update.match.end - update.match.start;
-					const newPath = this.getRelativePathForNote(view, update.newPath);
-					const newRef = this.buildReference(update.match, newPath);
-					const newLength = newRef.length;
-					positionOffset += newLength - oldLength;
-				} catch (error) {
-					console.error(`Error verifying processed image ${update.newPath}:`, error);
-					new Notice(`Warning: Could not verify processed image ${update.newPath}`, 3000);
-				}
-			}
-		}
-
-		this.storeLast(radius, unit);
+		// Queue-based processing with delay and progress popup
+		await this.processImagesQueueFromMatches(view, refreshed, radius, unit, shadow, border);
+		return;
 	}
 
 	private async getImagesInCurrentSubfolder(view: MarkdownView): Promise<TFile[]> {
@@ -457,7 +636,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		const imageRefs: string[] = [];
 
 		// Markdown image syntax: ![alt](path)
-		const mdRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+		const mdRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
 		let mdMatch;
 		while ((mdMatch = mdRegex.exec(content)) !== null) {
 			imageRefs.push(mdMatch[2].trim());
@@ -663,53 +842,8 @@ export default class ImageRoundedFramePlugin extends Plugin {
 	}
 
 	private async processBulkImages(view: MarkdownView | null, imageFiles: TFile[], radius: number, unit: RadiusUnit, shadow?: ShadowOptions, border?: BorderOptions): Promise<void> {
-		this.style.updateStyles(radius, unit, shadow, border);
-
-		let processedCount = 0;
-		const totalCount = imageFiles.length;
-
-		for (const imageFile of imageFiles) {
-			try {
-				// Create a virtual "match" for bulk processing
-				const virtualMatch: ImageMatch = {
-					lineNumber: 0,
-					start: 0,
-					end: imageFile.basename.length,
-					path: imageFile.path,
-					alt: imageFile.basename,
-					raw: imageFile.basename,
-					kind: 'markdown'
-				};
-
-				const { blob, newPath } = await this.roundImageFile(imageFile, radius, unit, shadow, border);
-				await this.writeRoundedVersion(newPath, blob);
-
-				// Verify the file was actually written and is accessible
-				try {
-					const writtenFile = this.app.vault.getAbstractFileByPath(newPath);
-					if (!writtenFile || !(writtenFile instanceof TFile) || writtenFile.stat.size === 0) {
-						console.error(`Bulk processing: Failed to verify written file: ${newPath}`);
-						// Continue with next image, don't count this as successful
-						continue;
-					}
-				} catch (error) {
-					console.error(`Bulk processing: Error verifying written file ${newPath}:`, error);
-					continue;
-				}
-
-				// For bulk operations, we don't update references in notes since there are no references to update
-				// The images are just processed and saved with rounded versions
-
-				processedCount++;
-				if (processedCount % 10 === 0 || processedCount === totalCount) {
-					new Notice(`Processed ${processedCount}/${totalCount} images`, 1000);
-				}
-			} catch (err) {
-				console.error(`Failed to process image ${imageFile.path}:`, err);
-			}
-		}
-
-		new Notice(`Bulk processing complete: ${processedCount}/${totalCount} images processed`, 3000);
+		await this.processImageFilesQueue(view, imageFiles, radius, unit, shadow, border);
+		return;
 	}
 
 	private getRelativePathForNote(view: MarkdownView, absolutePath: string): string {
@@ -786,11 +920,14 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		const mdRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
 		let md: RegExpExecArray | null;
 		while ((md = mdRegex.exec(line)) !== null) {
+			const rawPath = (md[2] || '').trim();
+			const safePath = this.sanitizeImagePath(rawPath);
+			if (!safePath) continue;
 			matches.push({
 				lineNumber,
 				start: md.index,
 				end: md.index + md[0].length,
-				path: md[2].trim(),
+				path: safePath,
 				alt: (md[1] || '').trim(),
 				raw: md[0],
 				kind: 'markdown',
@@ -817,11 +954,13 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			const raw = tag[0];
 			const path = this.getAttr(raw, 'src');
 			if (!path) continue;
+			const safePath = this.sanitizeImagePath(path);
+			if (!safePath) continue;
 			matches.push({
 				lineNumber,
 				start: tag.index,
 				end: tag.index + raw.length,
-				path,
+				path: safePath,
 				alt: this.getAttr(raw, 'alt') ?? '',
 				raw,
 				kind: 'html',
@@ -837,11 +976,75 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		return (attr[2] ?? attr[3] ?? '').trim();
 	}
 
+	private sanitizeImagePath(raw: string): string | null {
+		if (!raw) return null;
+		let p = raw.trim();
+
+		// 1) If the raw contains a full markdown image pattern, extract its ( ... ) content
+		try {
+			const mdMatch = /!\[[^\]]*\]\(([^)]+)\)/.exec(p);
+			if (mdMatch && mdMatch[1]) {
+				p = mdMatch[1].trim();
+			}
+		} catch {}
+
+		// 2) If the raw contains a wikilink image pattern, extract the [[ ... ]] target (before optional |)
+		try {
+			const wikiMatch = /!\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/.exec(p);
+			if (wikiMatch && wikiMatch[1]) {
+				p = wikiMatch[1].trim();
+			}
+		} catch {}
+
+		// 3) If still malformed and contains parentheses, try to take the innermost (...) if it looks like an image
+		if (p.includes('(') && p.includes(')')) {
+			const lastOpen = p.lastIndexOf('(');
+			const lastClose = p.indexOf(')', lastOpen + 1);
+			if (lastOpen >= 0 && lastClose > lastOpen) {
+				const inner = p.slice(lastOpen + 1, lastClose).trim();
+				if (/(\.(png|jpg|jpeg|gif|webp|bmp|svg))(\?|#|$)/i.test(inner)) {
+					p = inner;
+				}
+			}
+		}
+
+		// 4) Normalize slashes & decode
+		p = p.replace(/\\+/g, '/');
+		try { p = decodeURIComponent(p); } catch {}
+		p = p.replace(/^\.\//, '');
+
+		// 5) If the whole string still includes junk, try to pick the last token that ends with a valid image extension
+		const tokenMatchAll = p.match(/[^\s"'()]+\.(?:png|jpg|jpeg|gif|webp|bmp|svg)(?:[?#][^\s"'()]*)?/ig);
+		if (tokenMatchAll && tokenMatchAll.length > 0) {
+			p = tokenMatchAll[tokenMatchAll.length - 1];
+		}
+
+		// 6) Trim to end of extension if followed by query/hash
+		const exts = ['png','jpg','jpeg','gif','webp','bmp','svg'];
+		let bestEnd = -1;
+		for (const ext of exts) {
+			const re = new RegExp(`\\.${ext}(?:[?#].*|$)`, 'i');
+			const m = re.exec(p);
+			if (m && m.index + ('.' + ext).length > bestEnd) {
+				bestEnd = m.index + ('.' + ext).length;
+			}
+		}
+		if (bestEnd > 0) p = p.slice(0, bestEnd);
+
+		// 7) Basic sanity: must not contain control characters or unmatched quotes
+		if (/\n|\r/.test(p)) return null;
+		return p || null;
+	}
+
 	private resolveTFile(view: MarkdownView, link: string): TFile | null {
 		if (/^https?:/i.test(link)) return null;
 		
+		// Sanitize first
+		const sanitized = this.sanitizeImagePath(link);
+		const candidate = sanitized ?? link;
+		
 		// Decode URL-encoded paths
-		let decodedLink = decodeURIComponent(link);
+		let decodedLink = candidate;
 		// Remove leading ./ if present
 		decodedLink = decodedLink.replace(/^\.\//, '');
 		
@@ -849,10 +1052,6 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		
 		// Try multiple resolution strategies
 		let file = this.app.metadataCache.getFirstLinkpathDest(decodedLink, base);
-		if (file) return file;
-		
-		// Try with base path resolution
-		file = this.app.metadataCache.getFirstLinkpathDest(decodedLink, base);
 		if (file) return file;
 		
 		// Try direct path lookup
@@ -870,21 +1069,474 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		return null;
 	}
 
+	private async ensureBackupFolder(): Promise<void> {
+		try {
+			const backupFolder = this.app.vault.getAbstractFileByPath(this.BACKUP_FOLDER);
+			if (!backupFolder) {
+				await this.app.vault.createFolder(this.BACKUP_FOLDER);
+			}
+		} catch (error) {
+			console.warn('Failed to create backup folder:', error);
+		}
+	}
+
+	private async createBackup(originalPath: string): Promise<string> {
+		await this.ensureBackupFolder();
+
+		const timestamp = Date.now();
+		const filename = path.basename(originalPath);
+		const backupPath = `${this.BACKUP_FOLDER}/${timestamp}-${filename}`;
+
+		try {
+			const originalFile = this.app.vault.getAbstractFileByPath(originalPath);
+			if (originalFile && originalFile instanceof TFile) {
+				const content = await this.app.vault.readBinary(originalFile);
+				await this.app.vault.createBinary(backupPath, content);
+				return backupPath;
+			}
+		} catch (error) {
+			console.error(`Failed to create backup for ${originalPath}:`, error);
+		}
+		return '';
+	}
+
+	private async createLocalBackup(originalPath: string): Promise<string> {
+		const dirname = path.dirname(originalPath);
+		const filename = path.basename(originalPath);
+		const ext = path.extname(filename);
+		const base = path.basename(filename, ext);
+		const timestamp = Date.now();
+		const backupPath = dirname ? `${dirname}/${base}.backup-${timestamp}${ext}` : `${base}.backup-${timestamp}${ext}`;
+
+		try {
+			const originalFile = this.app.vault.getAbstractFileByPath(originalPath);
+			if (originalFile && originalFile instanceof TFile) {
+				const content = await this.app.vault.readBinary(originalFile);
+				await this.app.vault.createBinary(backupPath, content);
+				console.log(`Created local backup: ${backupPath}`);
+				return backupPath;
+			}
+		} catch (error) {
+			console.error(`Failed to create local backup for ${originalPath}:`, error);
+		}
+		return '';
+	}
+
+	private async restoreFromBackup(backupPath: string, targetPath: string): Promise<boolean> {
+		try {
+			const backupFile = this.app.vault.getAbstractFileByPath(backupPath);
+			if (backupFile && backupFile instanceof TFile) {
+				const content = await this.app.vault.readBinary(backupFile);
+				await this.app.vault.createBinary(targetPath, content);
+				return true;
+			}
+		} catch (error) {
+			console.error(`Failed to restore from backup ${backupPath}:`, error);
+		}
+		return false;
+	}
+
+	private async clearLastActionBackups(): Promise<void> {
+		if (!this.lastAction) return;
+
+		// Delete hidden folder backups
+		for (const backupPath of this.lastAction.backupPaths) {
+			try {
+				const backupFile = this.app.vault.getAbstractFileByPath(backupPath);
+				if (backupFile && backupFile instanceof TFile) {
+					await this.app.vault.delete(backupFile);
+				}
+			} catch (error) {
+				console.warn(`Failed to delete backup ${backupPath}:`, error);
+			}
+		}
+
+		// Delete local backups
+		for (const localBackupPath of this.lastAction.localBackupPaths) {
+			try {
+				const localBackupFile = this.app.vault.getAbstractFileByPath(localBackupPath);
+				if (localBackupFile && localBackupFile instanceof TFile) {
+					await this.app.vault.delete(localBackupFile);
+					console.log(`Cleaned up local backup: ${localBackupPath}`);
+				}
+			} catch (error) {
+				console.warn(`Failed to delete local backup ${localBackupPath}:`, error);
+			}
+		}
+
+		this.lastAction = null;
+	}
+
+	private async undoLastAction(): Promise<void> {
+		if (!this.lastAction) {
+			new Notice('No action to undo', 2000);
+			return;
+		}
+
+		let successCount = 0;
+		let failCount = 0;
+
+		// Restore original images from backups (try hidden folder first, then local)
+		for (let i = 0; i < this.lastAction.originalPaths.length; i++) {
+			const originalPath = this.lastAction.originalPaths[i];
+			let restored = false;
+
+			// Try hidden folder backup first
+			if (i < this.lastAction.backupPaths.length) {
+				const backupPath = this.lastAction.backupPaths[i];
+				if (await this.restoreFromBackup(backupPath, originalPath)) {
+					restored = true;
+				}
+			}
+
+			// If hidden folder backup failed, try local backup
+			if (!restored && i < this.lastAction.localBackupPaths.length) {
+				const localBackupPath = this.lastAction.localBackupPaths[i];
+				if (await this.restoreFromBackup(localBackupPath, originalPath)) {
+					restored = true;
+					console.log(`Restored from local backup: ${localBackupPath}`);
+				}
+			}
+
+			if (restored) {
+				successCount++;
+			} else {
+				failCount++;
+			}
+		}
+
+		// Delete the processed images
+		for (const newPath of this.lastAction.newPaths) {
+			try {
+				const processedFile = this.app.vault.getAbstractFileByPath(newPath);
+				if (processedFile && processedFile instanceof TFile) {
+					await this.app.vault.delete(processedFile);
+				}
+			} catch (error) {
+				console.warn(`Failed to delete processed image ${newPath}:`, error);
+				failCount++;
+			}
+		}
+
+		// Clear backups and reset last action
+		await this.clearLastActionBackups();
+
+		if (failCount === 0) {
+			new Notice(`Successfully undone last action (${successCount} images restored)`, 3000);
+		} else {
+			new Notice(`Partially undone last action (${successCount} restored, ${failCount} failed)`, 3000);
+		}
+	}
+
+	private async confirmLastAction(): Promise<void> {
+		if (!this.lastAction) {
+			new Notice('No action to confirm', 2000);
+			return;
+		}
+
+		// Delete all backups since the action is confirmed
+		await this.clearLastActionBackups();
+
+		new Notice('Last action confirmed - backups cleaned up', 2000);
+	}
+
+	private async emergencyRecoveryScan(): Promise<void> {
+		const allFiles = this.app.vault.getFiles();
+		const backupFiles: TFile[] = [];
+		const localBackupFiles: TFile[] = [];
+
+		// Scan for backup files
+		for (const file of allFiles) {
+			if (file.path.startsWith(this.BACKUP_FOLDER + '/')) {
+				backupFiles.push(file);
+			} else if (file.name.includes('.backup-')) {
+				localBackupFiles.push(file);
+			}
+		}
+
+		const totalBackups = backupFiles.length + localBackupFiles.length;
+
+		if (totalBackups === 0) {
+			new Notice('No backup files found in vault', 3000);
+			return;
+		}
+
+		// Show recovery options
+		const message = `Found ${totalBackups} backup files:\n` +
+			`• ${backupFiles.length} in hidden backup folder\n` +
+			`• ${localBackupFiles.length} local backups\n\n` +
+			`Check the console for detailed file list.`;
+
+		new Notice(message, 5000);
+		console.log('=== EMERGENCY RECOVERY SCAN ===');
+		console.log('Hidden backup folder files:');
+		backupFiles.forEach(file => console.log(`  ${file.path} (${file.stat.size} bytes)`));
+		console.log('Local backup files:');
+		localBackupFiles.forEach(file => console.log(`  ${file.path} (${file.stat.size} bytes)`));
+		console.log('=== END RECOVERY SCAN ===');
+		console.log('To restore files manually:');
+		console.log('1. Identify the backup file you want to restore');
+		console.log('2. Copy it to replace the original file path');
+		console.log('3. Delete the backup file when done');
+	}
+
+	private async forceCleanupAllBackups(): Promise<void> {
+		const allFiles = this.app.vault.getFiles();
+		let deletedCount = 0;
+
+		// Delete all backup files
+		for (const file of allFiles) {
+			if (file.path.startsWith(this.BACKUP_FOLDER + '/') || file.name.includes('.backup-')) {
+				try {
+					await this.app.vault.delete(file);
+					deletedCount++;
+				} catch (error) {
+					console.warn(`Failed to delete backup file: ${file.path}`, error);
+				}
+			}
+		}
+
+		// Clear last action tracking
+		this.lastAction = null;
+
+		if (deletedCount > 0) {
+			new Notice(`Cleaned up ${deletedCount} backup files`, 3000);
+		} else {
+			new Notice('No backup files found to clean up', 2000);
+		}
+	}
+
+	private showActionConfirmationPopup(): void {
+		if (!this.lastAction) return;
+
+		// Remove any existing popup
+		this.removeActionConfirmationPopup();
+
+		// Create the popup container
+		const popup = document.createElement('div');
+		popup.id = 'rounded-frame-confirmation-popup';
+		popup.style.cssText = `
+			position: fixed;
+			top: 20px;
+			right: 20px;
+			background: var(--background-primary, #ffffff);
+			border: 2px solid var(--interactive-accent, #4a90e2);
+			border-radius: 8px;
+			padding: 16px;
+			box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+			z-index: 10000;
+			max-width: 350px;
+			font-family: var(--font-interface, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+			color: var(--text-normal, #333333);
+		`;
+
+		// Create content
+		const title = document.createElement('div');
+		title.textContent = '✅ Image Processing Complete';
+		title.style.cssText = `
+			font-weight: bold;
+			font-size: 14px;
+			margin-bottom: 8px;
+			color: var(--text-accent, #4a90e2);
+		`;
+
+		const message = document.createElement('div');
+		const imageCount = this.lastAction.newPaths.length;
+		message.textContent = `Successfully processed ${imageCount} image${imageCount !== 1 ? 's' : ''}. Backups created for safety.`;
+		message.style.cssText = `
+			font-size: 13px;
+			margin-bottom: 12px;
+			line-height: 1.4;
+		`;
+
+		const question = document.createElement('div');
+		question.textContent = 'Keep the changes or revert?';
+		question.style.cssText = `
+			font-size: 12px;
+			margin-bottom: 12px;
+			font-style: italic;
+			color: var(--text-muted, #888888);
+		`;
+
+		// Create button container
+		const buttonContainer = document.createElement('div');
+		buttonContainer.style.cssText = `
+			display: flex;
+			gap: 8px;
+			justify-content: flex-end;
+		`;
+
+		// Confirm button
+		const confirmButton = document.createElement('button');
+		confirmButton.textContent = '✅ Confirm';
+		confirmButton.style.cssText = `
+			padding: 6px 12px;
+			background: var(--interactive-accent, #4a90e2);
+			color: var(--text-on-accent, #ffffff);
+			border: none;
+			border-radius: 4px;
+			cursor: pointer;
+			font-size: 12px;
+			font-weight: 500;
+			transition: background-color 0.2s;
+		`;
+		confirmButton.onmouseover = () => {
+			confirmButton.style.background = 'var(--interactive-accent-hover, #357abd)';
+		};
+		confirmButton.onmouseout = () => {
+			confirmButton.style.background = 'var(--interactive-accent, #4a90e2)';
+		};
+		confirmButton.onclick = async () => {
+			await this.confirmLastAction();
+			this.removeActionConfirmationPopup();
+		};
+
+		// Undo button
+		const undoButton = document.createElement('button');
+		undoButton.textContent = '↶ Undo';
+		undoButton.style.cssText = `
+			padding: 6px 12px;
+			background: var(--background-modifier-error, #ff6b6b);
+			color: var(--text-on-accent, #ffffff);
+			border: none;
+			border-radius: 4px;
+			cursor: pointer;
+			font-size: 12px;
+			font-weight: 500;
+			transition: background-color 0.2s;
+		`;
+		undoButton.onmouseover = () => {
+			undoButton.style.background = 'var(--background-modifier-error-hover, #ff5252)';
+		};
+		undoButton.onmouseout = () => {
+			undoButton.style.background = 'var(--background-modifier-error, #ff6b6b)';
+		};
+		undoButton.onclick = async () => {
+			await this.undoLastAction();
+			this.removeActionConfirmationPopup();
+		};
+
+		// Dismiss button (X)
+		const dismissButton = document.createElement('button');
+		dismissButton.textContent = '✕';
+		dismissButton.style.cssText = `
+			position: absolute;
+			top: 8px;
+			right: 8px;
+			background: none;
+			border: none;
+			cursor: pointer;
+			font-size: 16px;
+			color: var(--text-muted, #888888);
+			padding: 0;
+			width: 20px;
+			height: 20px;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+		`;
+		dismissButton.onclick = () => {
+			this.removeActionConfirmationPopup();
+		};
+
+		// Auto-dismiss after 30 seconds
+		setTimeout(() => {
+			this.removeActionConfirmationPopup();
+		}, 30000);
+
+		// Assemble the popup
+		buttonContainer.appendChild(undoButton);
+		buttonContainer.appendChild(confirmButton);
+
+		popup.appendChild(dismissButton);
+		popup.appendChild(title);
+		popup.appendChild(message);
+		popup.appendChild(question);
+		popup.appendChild(buttonContainer);
+
+		// Add to document
+		document.body.appendChild(popup);
+
+		// Add fade-in animation
+		popup.style.opacity = '0';
+		popup.style.transform = 'translateY(-10px)';
+		setTimeout(() => {
+			popup.style.transition = 'all 0.3s ease';
+			popup.style.opacity = '1';
+			popup.style.transform = 'translateY(0)';
+		}, 10);
+	}
+
+	private removeActionConfirmationPopup(): void {
+		const existingPopup = document.getElementById('rounded-frame-confirmation-popup');
+		if (existingPopup) {
+			existingPopup.style.transition = 'all 0.3s ease';
+			existingPopup.style.opacity = '0';
+			existingPopup.style.transform = 'translateY(-10px)';
+			setTimeout(() => {
+				if (existingPopup.parentNode) {
+					existingPopup.parentNode.removeChild(existingPopup);
+				}
+			}, 300);
+		}
+	}
+
 	private async roundImageFile(file: TFile, radius: number, unit: RadiusUnit, shadow?: ShadowOptions, border?: BorderOptions): Promise<{ blob: Blob; newPath: string }> {
 		const folder = file.parent?.path ?? '';
 		const base = file.basename;
 		const suffix = unit === 'percent' ? `${radius}p` : `${radius}px`;
 		const newPath = folder ? `${folder}/${base}-rounded-${suffix}.png` : `${base}-rounded-${suffix}.png`;
 
-		// Try Python first, fallback to Canvas
+		// Create temporary file path for safe processing
+		const tempPath = `${newPath}.processing-${Date.now()}`;
+
 		try {
-			await this.roundImageWithPython(file.path, newPath, radius, unit, shadow, border);
-			// Read the result
-			const arrayBuffer = await this.app.vault.readBinary(this.app.vault.getAbstractFileByPath(newPath) as TFile);
+			// Try Python first, process to temporary location
+			await this.roundImageWithPython(file.path, tempPath, radius, unit, shadow, border);
+
+			// Verify the temporary file was created and is valid
+			const tempFile = this.app.vault.getAbstractFileByPath(tempPath);
+			if (!tempFile || !(tempFile instanceof TFile)) {
+				throw new Error(`Failed to create temporary processed file: ${tempPath}`);
+			}
+
+			// Verify file size is reasonable (not empty/corrupted)
+			if (tempFile.stat.size === 0) {
+				throw new Error(`Processed file is empty: ${tempPath}`);
+			}
+
+			// Read the result from temporary location
+			const arrayBuffer = await this.app.vault.readBinary(tempFile);
+
+			// Write to final location (overwrite or create)
+			await this.writeRoundedVersion(newPath, new Blob([arrayBuffer], { type: 'image/png' }));
+			// Cleanup temp file
+			try { await this.app.vault.delete(tempFile as TFile); } catch {}
+
 			return { blob: new Blob([arrayBuffer], { type: 'image/png' }), newPath };
+
 		} catch (pythonError) {
-			// Fallback to Canvas method
-			return await this.roundImageWithCanvas(file, radius, unit);
+			// Clean up temporary file if it exists
+			try {
+				const tempFile = this.app.vault.getAbstractFileByPath(tempPath);
+				if (tempFile && tempFile instanceof TFile) {
+					await this.app.vault.delete(tempFile);
+				}
+			} catch (cleanupError) {
+				console.warn(`Failed to cleanup temporary file ${tempPath}:`, cleanupError);
+			}
+
+			// Fallback to Canvas method with same safe approach
+			try {
+				const result = await this.roundImageWithCanvas(file, radius, unit);
+				// Write directly to final location (overwrite or create)
+				await this.writeRoundedVersion(newPath, result.blob);
+				return { blob: result.blob, newPath };
+
+			} catch (canvasError) {
+				// If both methods fail, throw the original error
+				throw new Error(`Image processing failed for ${file.path}. Python error: ${pythonError.message}, Canvas error: ${canvasError.message}`);
+			}
 		}
 	}
 
@@ -1078,5 +1730,214 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 	private escapeAttr(value: string): string {
 		return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+	}
+
+	private async sleep(ms: number): Promise<void> {
+		await new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
+	private async appendDebugLog(event: string, details?: Record<string, any>): Promise<void> {
+		try {
+			const timestamp = new Date().toISOString();
+			let entry = `[${timestamp}] ${event}`;
+			if (details) {
+				entry += `\n${JSON.stringify(details, null, 2)}`;
+			}
+			entry += `\n`;
+
+			const existing = this.app.vault.getAbstractFileByPath(this.DEBUG_LOG_PATH) as TFile | null;
+			if (existing) {
+				const prev = await this.app.vault.read(existing);
+				await this.app.vault.modify(existing, prev + entry);
+			} else {
+				await this.app.vault.create(this.DEBUG_LOG_PATH, entry);
+			}
+		} catch (e) {
+			console.warn('Failed to write debug log:', e);
+		}
+	}
+
+	private startProgressPopup(total: number): void {
+		this.removeProgressPopup();
+		const popup = document.createElement('div');
+		popup.id = 'rounded-frame-progress-popup';
+		popup.style.cssText = `
+			position: fixed;
+			top: 20px;
+			right: 20px;
+			background: var(--background-secondary, #f5f5f5);
+			border: 1px solid var(--background-modifier-border, #ccc);
+			border-radius: 8px;
+			padding: 12px 14px;
+			box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+			z-index: 10000;
+			min-width: 260px;
+			font-size: 12px;
+		`;
+		popup.innerHTML = `
+			<div style="font-weight:600;margin-bottom:6px;">Processing images…</div>
+			<div id="rf-progress-text">0/${total} done (0 success, 0 failed)</div>
+			<div id="rf-progress-current" style="margin-top:6px;color:var(--text-muted,#888);"></div>
+		`;
+		document.body.appendChild(popup);
+		this.progressPopup = popup;
+	}
+
+	private updateProgressPopup(done: number, success: number, failed: number, total: number, current?: string): void {
+		const popup = this.progressPopup;
+		if (!popup) return;
+		const textEl = popup.querySelector('#rf-progress-text') as HTMLElement | null;
+		if (textEl) textEl.textContent = `${done}/${total} done (${success} success, ${failed} failed)`;
+		const curEl = popup.querySelector('#rf-progress-current') as HTMLElement | null;
+		if (curEl) curEl.textContent = current ? `Current: ${current}` : '';
+	}
+
+	private finishProgressPopup(summary: string): void {
+		const popup = this.progressPopup;
+		if (!popup) return;
+		const textEl = popup.querySelector('#rf-progress-text') as HTMLElement | null;
+		if (textEl) textEl.textContent = summary;
+		setTimeout(() => this.removeProgressPopup(), 1500);
+	}
+
+	private removeProgressPopup(): void {
+		if (this.progressPopup && this.progressPopup.parentElement) {
+			this.progressPopup.parentElement.removeChild(this.progressPopup);
+		}
+		this.progressPopup = null;
+	}
+
+	private async processImagesQueueFromMatches(view: MarkdownView, refreshed: ImageMatch[], radius: number, unit: RadiusUnit, shadow?: ShadowOptions, border?: BorderOptions): Promise<void> {
+		// Update styles once
+		this.style.updateStyles(radius, unit, shadow, border);
+
+		const total = refreshed.length;
+		let done = 0, success = 0, failed = 0;
+		const originalPaths: string[] = [];
+		const backupPaths: string[] = [];
+		const localBackupPaths: string[] = [];
+		const newPaths: string[] = [];
+
+		this.startProgressPopup(total);
+
+		for (const m of refreshed) {
+			this.updateProgressPopup(done, success, failed, total, m.path);
+			await this.sleep(500);
+
+			try {
+				const file = this.resolveTFile(view, m.path);
+				if (!file) { await this.appendDebugLog('FILE_NOT_FOUND', { path: m.path, mode: 'note' }); failed++; done++; this.updateProgressPopup(done, success, failed, total); continue; }
+
+				// Ensure readable
+				try { await this.app.vault.readBinary(file); } catch (readErr: any) { await this.appendDebugLog('READ_FAILED', { path: m.path, error: String(readErr) }); failed++; done++; this.updateProgressPopup(done, success, failed, total); continue; }
+
+				// Backups - require at least ONE to succeed
+				const hiddenBackup = await this.createBackup(file.path);
+				const localBackup = await this.createLocalBackup(file.path);
+				if (!hiddenBackup && !localBackup) { await this.appendDebugLog('BACKUP_FAILED', { path: file.path }); failed++; done++; this.updateProgressPopup(done, success, failed, total); continue; }
+
+				try {
+					const { newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
+					const finalFile = this.app.vault.getAbstractFileByPath(newPath);
+					if (!finalFile || !(finalFile instanceof TFile) || finalFile.stat.size === 0) {
+						// cleanup backups since nothing changed
+						if (hiddenBackup) { const f = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (f) await this.app.vault.delete(f); }
+						if (localBackup) { const f2 = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (f2) await this.app.vault.delete(f2); }
+						await this.appendDebugLog('PROCESSING_OUTPUT_INVALID', { source: file.path, output: newPath });
+						failed++; done++; this.updateProgressPopup(done, success, failed, total); continue;
+					}
+
+					// Update reference immediately (safe due to descending order)
+					this.updateReference(view.editor, view, m, newPath);
+
+					originalPaths.push(file.path);
+					if (hiddenBackup) backupPaths.push(hiddenBackup);
+					if (localBackup) localBackupPaths.push(localBackup);
+					newPaths.push(newPath);
+					success++;
+				} catch (err: any) {
+					// On failure, try to remove backups to avoid clutter if nothing changed
+					try { if (hiddenBackup) { const bf = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (bf) await this.app.vault.delete(bf); } } catch {}
+					try { if (localBackup) { const lbf = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (lbf) await this.app.vault.delete(lbf); } } catch {}
+					await this.appendDebugLog('PROCESSING_EXCEPTION', { path: file.path, error: String(err?.stack || err) });
+					failed++;
+				}
+
+				done++;
+				this.updateProgressPopup(done, success, failed, total);
+			} catch (outer: any) {
+				await this.appendDebugLog('UNEXPECTED_FAILURE_NOTE', { path: m.path, error: String(outer) });
+				failed++; done++;
+				this.updateProgressPopup(done, success, failed, total);
+			}
+		}
+
+		if (newPaths.length > 0) {
+			this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: view.file?.path ?? '', timestamp: Date.now() };
+			this.showActionConfirmationPopup();
+		}
+
+		this.finishProgressPopup(`Completed ${done}/${total}: ${success} success, ${failed} failed`);
+		if (failed > 0) { await this.appendDebugLog('SUMMARY_NOTE', { total, success, failed, note: view.file?.path ?? '' }); }
+		this.storeLast(radius, unit);
+	}
+
+	private async processImageFilesQueue(view: MarkdownView | null, imageFiles: TFile[], radius: number, unit: RadiusUnit, shadow?: ShadowOptions, border?: BorderOptions): Promise<void> {
+		this.style.updateStyles(radius, unit, shadow, border);
+		const total = imageFiles.length;
+		let done = 0, success = 0, failed = 0;
+		const originalPaths: string[] = [];
+		const backupPaths: string[] = [];
+		const localBackupPaths: string[] = [];
+		const newPaths: string[] = [];
+
+		this.startProgressPopup(total);
+
+		for (const imageFile of imageFiles) {
+			this.updateProgressPopup(done, success, failed, total, imageFile.path);
+			await this.sleep(500);
+
+			try {
+				try { await this.app.vault.readBinary(imageFile); } catch (readErr: any) { await this.appendDebugLog('READ_FAILED', { path: imageFile.path, error: String(readErr) }); failed++; done++; this.updateProgressPopup(done, success, failed, total); continue; }
+				const hiddenBackup = await this.createBackup(imageFile.path);
+				const localBackup = await this.createLocalBackup(imageFile.path);
+				if (!hiddenBackup && !localBackup) { await this.appendDebugLog('BACKUP_FAILED', { path: imageFile.path }); failed++; done++; this.updateProgressPopup(done, success, failed, total); continue; }
+
+				try {
+					const { newPath } = await this.roundImageFile(imageFile, radius, unit, shadow, border);
+					const finalFile = this.app.vault.getAbstractFileByPath(newPath);
+					if (!finalFile || !(finalFile instanceof TFile) || finalFile.stat.size === 0) {
+						if (hiddenBackup) { const f = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (f) await this.app.vault.delete(f); }
+						if (localBackup) { const f2 = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (f2) await this.app.vault.delete(f2); }
+						await this.appendDebugLog('PROCESSING_OUTPUT_INVALID', { source: imageFile.path, output: newPath });
+						failed++; done++; this.updateProgressPopup(done, success, failed, total); continue;
+					}
+					originalPaths.push(imageFile.path);
+					if (hiddenBackup) backupPaths.push(hiddenBackup);
+					if (localBackup) localBackupPaths.push(localBackup);
+					newPaths.push(newPath);
+					success++;
+				} catch (err: any) {
+					try { if (hiddenBackup) { const bf = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (bf) await this.app.vault.delete(bf); } } catch {}
+					try { if (localBackup) { const lbf = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (lbf) await this.app.vault.delete(lbf); } } catch {}
+					await this.appendDebugLog('PROCESSING_EXCEPTION', { path: imageFile.path, error: String(err?.stack || err) });
+					failed++;
+				}
+
+				done++;
+				this.updateProgressPopup(done, success, failed, total);
+			} catch (outer: any) {
+				await this.appendDebugLog('UNEXPECTED_FAILURE_BULK', { path: imageFile.path, error: String(outer) });
+				failed++; done++;
+				this.updateProgressPopup(done, success, failed, total);
+			}
+		}
+
+		if (newPaths.length > 0) {
+			this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: view?.file?.path ?? '', timestamp: Date.now() };
+			this.showActionConfirmationPopup();
+		}
+		this.finishProgressPopup(`Completed ${done}/${total}: ${success} success, ${failed} failed`);
+		if (failed > 0) { await this.appendDebugLog('SUMMARY_BULK', { total, success, failed }); }
 	}
 }

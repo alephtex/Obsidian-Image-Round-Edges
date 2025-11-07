@@ -35,13 +35,15 @@ def apply_effects(input_path, output_path, radius_value, unit,
     radius_px = min(radius_px, max_radius)
     radius_px = max(0, radius_px)
 
-    # Create the final canvas (larger if shadow is enabled)
-    canvas_padding = shadow_blur + shadow_offset + 10 if shadow_enabled else 0
+    # Create the final canvas (larger if shadow or border is enabled)
+    shadow_padding = shadow_blur + shadow_offset + 10 if shadow_enabled else 0
+    border_padding = border_width if border_enabled else 0
+    canvas_padding = shadow_padding + border_padding
     canvas_w = w + canvas_padding * 2
     canvas_h = h + canvas_padding * 2
     canvas = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
 
-    # Position of original image on canvas
+    # Position of original image on canvas (centered with padding)
     img_x = canvas_padding
     img_y = canvas_padding
 
@@ -63,54 +65,62 @@ def apply_effects(input_path, output_path, radius_value, unit,
         # Apply blur to shadow
         shadow = shadow.filter(ImageFilter.GaussianBlur(shadow_blur))
 
-        # Position shadow on canvas
+        # Position shadow on canvas (accounting for border padding)
         shadow_x = img_x + shadow_offset
         shadow_y = img_y + shadow_offset
         canvas.paste(shadow, (shadow_x, shadow_y), shadow)
 
-    # Apply border if enabled
+    # First, paste the rounded image
+    canvas.paste(rounded_img, (img_x, img_y), mask)
+
+    # Apply border AFTER rounding if enabled (so it appears outside the rounded corners)
     if border_enabled:
-        # Create border mask (slightly larger than image mask)
-        border_mask = Image.new('L', (w, h), 0)
-        border_draw = ImageDraw.Draw(border_mask)
+        # Create border on the full canvas size
+        border_canvas = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
+        border_draw = ImageDraw.Draw(border_canvas)
 
+        # Calculate border position (outside the rounded image area)
+        border_x = img_x - border_width
+        border_y = img_y - border_width
+        border_w = w + border_width * 2
+        border_h = h + border_width * 2
+
+        # Draw the outer border shape (larger rounded rectangle)
         if border_style == "solid":
-            # Solid border: draw a slightly larger rounded rectangle
-            border_draw.rounded_rectangle([(-border_width, -border_width), (w + border_width, h + border_width)],
-                                        radius=int(radius_px + border_width), fill=255)
-            # Subtract the inner area to create the border
-            inner_mask = Image.new('L', (w, h), 255)
-            inner_draw = ImageDraw.Draw(inner_mask)
-            inner_draw.rounded_rectangle([(0, 0), (w, h)], radius=int(radius_px), fill=0)
-            border_mask = Image.composite(border_mask, Image.new('L', (w, h), 0), inner_mask)
+            border_draw.rounded_rectangle([border_x, border_y, border_x + border_w, border_y + border_h],
+                                        radius=int(radius_px + border_width), fill=hex_to_rgb(border_color) + (255,))
         elif border_style == "dashed":
-            # Dashed border: draw multiple small arcs
-            # This is a simplified implementation
-            border_draw.rounded_rectangle([(-border_width, -border_width), (w + border_width, h + border_width)],
-                                        radius=int(radius_px + border_width), fill=255)
-            # Subtract the inner area
-            inner_mask = Image.new('L', (w, h), 255)
-            inner_draw = ImageDraw.Draw(inner_mask)
-            inner_draw.rounded_rectangle([(0, 0), (w, h)], radius=int(radius_px), fill=0)
-            border_mask = Image.composite(border_mask, Image.new('L', (w, h), 0), inner_mask)
-        else:  # dotted
-            # Dotted border: similar to dashed but smaller segments
-            border_draw.rounded_rectangle([(-border_width, -border_width), (w + border_width, h + border_width)],
-                                        radius=int(radius_px + border_width), fill=255)
-            inner_mask = Image.new('L', (w, h), 255)
-            inner_draw = ImageDraw.Draw(inner_mask)
-            inner_draw.rounded_rectangle([(0, 0), (w, h)], radius=int(radius_px), fill=0)
-            border_mask = Image.composite(border_mask, Image.new('L', (w, h), 0), inner_mask)
+            # For dashed, we'll draw multiple rounded rectangles with gaps
+            # This is a simplified dashed implementation
+            dash_length = border_width * 3
+            gap_length = border_width * 2
+            for i in range(0, int(border_w + border_h), dash_length + gap_length):
+                # Draw dashes along the perimeter (simplified)
+                if i < border_w:
+                    # Top dash
+                    border_draw.rounded_rectangle([border_x + i, border_y, border_x + min(i + dash_length, border_w), border_y + border_width],
+                                                radius=max(0, int(radius_px + border_width) - i) if i < radius_px + border_width else 0,
+                                                fill=hex_to_rgb(border_color) + (255,))
+                # Add more complex dashed logic for full perimeter if needed
+        else:  # dotted - similar to dashed but smaller
+            dot_length = border_width
+            gap_length = border_width * 2
+            for i in range(0, int(border_w + border_h), dot_length + gap_length):
+                if i < border_w:
+                    border_draw.rounded_rectangle([border_x + i, border_y, border_x + min(i + dot_length, border_w), border_y + border_width],
+                                                radius=max(0, int(radius_px + border_width) - i) if i < radius_px + border_width else 0,
+                                                fill=hex_to_rgb(border_color) + (255,))
 
-        # Create border image
-        border_img = Image.new('RGBA', (w, h), hex_to_rgb(border_color) + (255,))
-        border_img.putalpha(border_mask)
+        # Create mask for the inner area (where the rounded image is) to cut out from border
+        inner_mask = Image.new('L', (canvas_w, canvas_h), 0)
+        inner_draw = ImageDraw.Draw(inner_mask)
+        inner_draw.rounded_rectangle([img_x, img_y, img_x + w, img_y + h], radius=int(radius_px), fill=255)
+
+        # Apply the inner mask to remove border from inside the rounded image area
+        border_canvas.putalpha(Image.composite(Image.new('L', (canvas_w, canvas_h), 255), Image.new('L', (canvas_w, canvas_h), 0), inner_mask))
 
         # Composite border onto canvas
-        canvas.paste(border_img, (img_x, img_y), border_mask)
-
-    # Finally, paste the rounded image on top
-    canvas.paste(rounded_img, (img_x, img_y), mask)
+        canvas = Image.alpha_composite(canvas, border_canvas)
 
     # Save as PNG
     canvas.save(output_path, 'PNG')

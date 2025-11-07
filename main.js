@@ -568,11 +568,191 @@ var RoundedFrameModal = class extends import_obsidian2.Modal {
 };
 
 // main.ts
+var PY_ROUND_IMAGE = `#!/usr/bin/env python3
+# 1. Load image from input path
+# 2. Calculate symmetric border radius based on smaller dimension
+# 3. Create rounded corners mask with transparency
+# 4. Apply shadow effect if enabled
+# 5. Apply border effect if enabled
+# 6. Composite all effects
+# 7. Save result as PNG with transparency
+
+import sys
+from PIL import Image, ImageDraw, ImageFilter
+import math
+
+def hex_to_rgb(hex_color):
+    """Convert hex color string to RGB tuple"""
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+
+def apply_effects(input_path, output_path, radius_value, unit,
+                  shadow_enabled=False, shadow_color="#000000", shadow_blur=10, shadow_offset=5,
+                  border_enabled=False, border_color="#cccccc", border_width=2, border_style="solid"):
+    # Load image
+    img = Image.open(input_path).convert("RGBA")
+    w, h = img.size
+
+    # Calculate radius
+    base_dimension = min(w, h)
+    max_radius = base_dimension / 2
+
+    if unit == 'percent':
+        radius_px = (radius_value / 100) * base_dimension
+    else:
+        radius_px = radius_value
+
+    radius_px = min(radius_px, max_radius)
+    radius_px = max(0, radius_px)
+
+    # Create the final canvas (larger if shadow or border is enabled)
+    shadow_padding = shadow_blur + shadow_offset + 10 if shadow_enabled else 0
+    border_padding = border_width if border_enabled else 0
+    canvas_padding = shadow_padding + border_padding
+    canvas_w = w + canvas_padding * 2
+    canvas_h = h + canvas_padding * 2
+    canvas = Image.new('RGBA', (0 + canvas_w, 0 + canvas_h), (0, 0, 0, 0))
+
+    # Position of original image on canvas (centered with padding)
+    img_x = canvas_padding
+    img_y = canvas_padding
+
+    # Create mask for rounded corners
+    mask = Image.new('L', (w, h), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.rounded_rectangle([(0, 0), (w, h)], radius=int(radius_px), fill=255)
+
+    # Apply rounded corners to image
+    rounded_img = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+    rounded_img.paste(img, (0, 0), mask)
+
+    # Apply shadow if enabled
+    if shadow_enabled:
+        # Create shadow
+        shadow = Image.new('RGBA', (w, h), hex_to_rgb(shadow_color) + (255,))
+        shadow.putalpha(mask)
+
+        # Apply blur to shadow
+        shadow = shadow.filter(ImageFilter.GaussianBlur(shadow_blur))
+
+        # Position shadow on canvas (accounting for border padding)
+        shadow_x = img_x + shadow_offset
+        shadow_y = img_y + shadow_offset
+        canvas.paste(shadow, (shadow_x, shadow_y), shadow)
+
+    # First, paste the rounded image
+    canvas.paste(rounded_img, (img_x, img_y), mask)
+
+    # Apply border AFTER rounding if enabled (so it appears outside the rounded corners)
+    if border_enabled:
+        # Create border on the full canvas size
+        border_canvas = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
+        border_draw = ImageDraw.Draw(border_canvas)
+
+        # Calculate border position (outside the rounded image area)
+        border_x = img_x - border_width
+        border_y = img_y - border_width
+        border_w = w + border_width * 2
+        border_h = h + border_width * 2
+
+        # Draw the outer border shape (larger rounded rectangle)
+        if border_style == "solid":
+            border_draw.rounded_rectangle([border_x, border_y, border_x + border_w, border_y + border_h],
+                                        radius=int(radius_px + border_width), fill=hex_to_rgb(border_color) + (255,))
+        elif border_style == "dashed":
+            # For dashed, we'll draw multiple rounded rectangles with gaps
+            # This is a simplified dashed implementation
+            dash_length = border_width * 3
+            gap_length = border_width * 2
+            for i in range(0, int(border_w + border_h), dash_length + gap_length):
+                # Draw dashes along the perimeter (simplified)
+                if i < border_w:
+                    # Top dash
+                    border_draw.rounded_rectangle([border_x + i, border_y, border_x + min(i + dash_length, border_w), border_y + border_width],
+                                                radius=max(0, int(radius_px + border_width) - i) if i < radius_px + border_width else 0,
+                                                fill=hex_to_rgb(border_color) + (255,))
+                # Add more complex dashed logic for full perimeter if needed
+        else:  # dotted - similar to dashed but smaller
+            dot_length = border_width
+            gap_length = border_width * 2
+            for i in range(0, int(border_w + border_h), dot_length + gap_length):
+                if i < border_w:
+                    border_draw.rounded_rectangle([border_x + i, border_y, border_x + min(i + dot_length, border_w), border_y + border_width],
+                                                radius=max(0, int(radius_px + border_width) - i) if i < radius_px + border_width else 0,
+                                                fill=hex_to_rgb(border_color) + (255,))
+
+        # Create mask for the inner area (where the rounded image is) to cut out from border
+        inner_mask = Image.new('L', (canvas_w, canvas_h), 0)
+        inner_draw = ImageDraw.Draw(inner_mask)
+        inner_draw.rounded_rectangle([img_x, img_y, img_x + w, img_y + h], radius=int(radius_px), fill=255)
+
+        # Apply the inner mask to remove border from inside the rounded image area
+        border_canvas.putalpha(Image.composite(Image.new('L', (canvas_w, canvas_h), 255), Image.new('L', (canvas_w, canvas_h), 0), inner_mask))
+
+        # Composite border onto canvas
+        canvas = Image.alpha_composite(canvas, border_canvas)
+
+    # Save as PNG
+    canvas.save(output_path, 'PNG')
+    return True
+
+def round_image(input_path, output_path, radius_value, unit):
+    # Legacy function for backward compatibility
+    return apply_effects(input_path, output_path, radius_value, unit)
+
+if __name__ == '__main__':
+    # Support both old and new argument formats for backward compatibility
+    if len(sys.argv) == 5:
+        # Legacy format: input_path, output_path, radius_value, unit
+        input_path = sys.argv[1]
+        output_path = sys.argv[2]
+        radius_value = float(sys.argv[3])
+        unit = sys.argv[4]
+
+        try:
+            round_image(input_path, output_path, radius_value, unit)
+            print("SUCCESS")
+        except Exception as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+    elif len(sys.argv) >= 13:
+        # New format with effects: input_path, output_path, radius_value, unit,
+        # shadow_enabled, shadow_color, shadow_blur, shadow_offset,
+        # border_enabled, border_color, border_width, border_style
+        input_path = sys.argv[1]
+        output_path = sys.argv[2]
+        radius_value = float(sys.argv[3])
+        unit = sys.argv[4]
+        shadow_enabled = sys.argv[5].lower() == 'true'
+        shadow_color = sys.argv[6]
+        shadow_blur = int(sys.argv[7])
+        shadow_offset = int(sys.argv[8])
+        border_enabled = sys.argv[9].lower() == 'true'
+        border_color = sys.argv[10]
+        border_width = int(sys.argv[11])
+        border_style = sys.argv[12]
+
+        try:
+            apply_effects(input_path, output_path, radius_value, unit,
+                         shadow_enabled, shadow_color, shadow_blur, shadow_offset,
+                         border_enabled, border_color, border_width, border_style)
+            print("SUCCESS")
+        except Exception as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print("ERROR: Invalid number of arguments", file=sys.stderr)
+        sys.exit(1)
+`;
 var execAsync = (0, import_util.promisify)(import_child_process.exec);
 var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
   constructor() {
     super(...arguments);
     this.style = new RoundedStyleManager();
+    this.lastAction = null;
+    this.BACKUP_FOLDER = ".obsidian-image-round-edges-backups";
+    this.progressPopup = null;
+    this.DEBUG_LOG_PATH = "image-rounded-frame-debug.log";
   }
   async onload() {
     await this.loadSettings();
@@ -582,15 +762,17 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     this.addCommand({
       id: "rounded-frame-apply-visible",
       name: "Rounded frame: apply to visible images",
-      checkCallback: (checking) => {
+      callback: () => {
         const view = this.app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
-        if (!view)
-          return false;
+        if (!view) {
+          new import_obsidian3.Notice("Open a note to use this command", 2e3);
+          return;
+        }
         const visible = this.getVisibleImages(view);
-        if (checking)
-          return visible.length > 0;
-        if (visible.length === 0)
-          return false;
+        if (visible.length === 0) {
+          new import_obsidian3.Notice("No visible images found in the active note", 2e3);
+          return;
+        }
         const matches = [];
         for (const img of visible) {
           const src = img.getAttribute("src") || img.getAttribute("data-src") || "";
@@ -599,9 +781,10 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
             matches.push(m);
         }
         const unique = this.uniqueMatches(matches);
-        if (unique.length === 0)
-          return false;
-        const first = visible[0];
+        if (unique.length === 0) {
+          new import_obsidian3.Notice("Could not resolve image references in this note", 2e3);
+          return;
+        }
         const imageSources = visible.map((img) => img.getAttribute("src") || img.getAttribute("data-src") || "").filter((src) => src);
         const initial = this.getInitialRadius();
         const modal = new RoundedFrameModal(this.app, {
@@ -621,21 +804,22 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
           onSubmit: (radius, unit, shadow, border) => this.applyRoundedFrameToMatches(view, unique, radius, unit, shadow, border)
         });
         modal.open();
-        return true;
       }
     });
     this.addCommand({
       id: "rounded-frame-apply-all",
       name: "Rounded frame: apply to all images in note",
-      checkCallback: (checking) => {
+      callback: () => {
         const view = this.app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
-        if (!view)
-          return false;
+        if (!view) {
+          new import_obsidian3.Notice("Open a note to use this command", 2e3);
+          return;
+        }
         const all = this.getAllMatches(view);
-        if (checking)
-          return all.length > 0;
-        if (all.length === 0)
-          return false;
+        if (all.length === 0) {
+          new import_obsidian3.Notice("No image references found in this note", 2e3);
+          return;
+        }
         const initial = this.getInitialRadius();
         const modal = new RoundedFrameModal(this.app, {
           initialRadius: initial.radius,
@@ -655,30 +839,64 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
           onSubmit: (radius, unit, shadow, border) => this.applyRoundedFrameToMatches(view, all, radius, unit, shadow, border)
         });
         modal.open();
-        return true;
       }
     });
     this.addCommand({
       id: "rounded-frame-process-subfolder",
       name: "Rounded frame: process all images in current subfolder",
-      checkCallback: (checking) => {
+      callback: () => {
         const view = this.app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
-        if (!view || !view.file)
-          return false;
-        if (checking)
-          return true;
+        if (!view || !view.file) {
+          new import_obsidian3.Notice("Open a note inside the target folder to use this", 3e3);
+          return;
+        }
         this.processSubfolderImages(view);
-        return true;
       }
     });
     this.addCommand({
       id: "rounded-frame-process-vault",
       name: "Rounded frame: process all images in vault",
-      checkCallback: (checking) => {
-        if (checking)
-          return true;
+      callback: () => {
         this.processVaultImages();
-        return true;
+      }
+    });
+    this.addCommand({
+      id: "rounded-frame-undo-last",
+      name: "Rounded frame: undo last action",
+      callback: () => {
+        if (!this.lastAction) {
+          new import_obsidian3.Notice("No action to undo", 2e3);
+          return;
+        }
+        this.undoLastAction();
+      }
+    });
+    this.addCommand({
+      id: "rounded-frame-confirm-last",
+      name: "Rounded frame: confirm last action",
+      callback: () => {
+        if (!this.lastAction) {
+          new import_obsidian3.Notice("No action to confirm", 2e3);
+          return;
+        }
+        this.confirmLastAction();
+      }
+    });
+    this.addCommand({
+      id: "rounded-frame-emergency-recovery",
+      name: "Rounded frame: emergency recovery (scan for backups)",
+      callback: () => {
+        this.emergencyRecoveryScan();
+      }
+    });
+    this.addCommand({
+      id: "rounded-frame-cleanup-backups",
+      name: "Rounded frame: cleanup all backup files",
+      callback: async () => {
+        const confirmed = confirm("This will permanently delete ALL backup files in your vault. This action cannot be undone. Continue?");
+        if (confirmed) {
+          await this.forceCleanupAllBackups();
+        }
       }
     });
   }
@@ -687,6 +905,9 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
   }
   async saveSettings() {
     await this.saveData(this.settings);
+  }
+  async onunload() {
+    this.removeActionConfirmationPopup();
   }
   ensureUiStyles() {
     if (document.head.querySelector("#rounded-frame-ui"))
@@ -726,10 +947,25 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     if (!fs.existsSync(pluginDir)) {
       fs.mkdirSync(pluginDir, { recursive: true });
     }
-    const sourceScript = path.join(__dirname, "round_image.py");
-    if (fs.existsSync(sourceScript) && !fs.existsSync(pythonScript)) {
-      fs.copyFileSync(sourceScript, pythonScript);
-      fs.chmodSync(pythonScript, 493);
+    let shouldWrite = false;
+    try {
+      if (!fs.existsSync(pythonScript))
+        shouldWrite = true;
+      else {
+        const stat = fs.statSync(pythonScript);
+        if (stat.size < 5e3)
+          shouldWrite = true;
+      }
+    } catch (e) {
+      shouldWrite = true;
+    }
+    if (shouldWrite) {
+      try {
+        fs.writeFileSync(pythonScript, PY_ROUND_IMAGE, { encoding: "utf-8" });
+        fs.chmodSync(pythonScript, 493);
+      } catch (e) {
+        console.warn("Failed to materialize embedded python script:", e);
+      }
     }
   }
   // Right-click integrations removed; command-driven flow only
@@ -811,72 +1047,8 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
       }
       return b.start - a.start;
     });
-    this.style.updateStyles(radius, unit, shadow, border);
-    const updates = [];
-    for (const m of refreshed) {
-      try {
-        const file = this.resolveTFile(view, m.path);
-        if (!file) {
-          new import_obsidian3.Notice(`Could not find file: ${m.path}`, 2e3);
-          continue;
-        }
-        const { blob, newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
-        await this.writeRoundedVersion(newPath, blob);
-        try {
-          const writtenFile = this.app.vault.getAbstractFileByPath(newPath);
-          if (writtenFile && writtenFile instanceof import_obsidian3.TFile && writtenFile.stat.size > 0) {
-            updates.push({ match: m, newPath, success: true });
-          } else {
-            console.error(`Failed to verify written file: ${newPath}`);
-            updates.push({ match: m, newPath: "", success: false });
-          }
-        } catch (error) {
-          console.error(`Error verifying written file ${newPath}:`, error);
-          updates.push({ match: m, newPath: "", success: false });
-        }
-      } catch (err) {
-        new import_obsidian3.Notice(`Failed to round image: ${m.path} - ${err}`, 3e3);
-        updates.push({ match: m, newPath: "", success: false });
-      }
-    }
-    let positionOffset = 0;
-    const sortedUpdates = updates.sort((a, b) => {
-      if (a.match.lineNumber !== b.match.lineNumber) {
-        return a.match.lineNumber - b.match.lineNumber;
-      }
-      return a.match.start - b.match.start;
-    });
-    for (const update of sortedUpdates) {
-      if (update.success) {
-        try {
-          const processedFile = this.app.vault.getAbstractFileByPath(update.newPath);
-          if (!processedFile || !(processedFile instanceof import_obsidian3.TFile)) {
-            console.warn(`Processed image not found at ${update.newPath}, skipping reference update`);
-            continue;
-          }
-          if (processedFile.stat.size === 0) {
-            console.warn(`Processed image ${update.newPath} is empty, skipping reference update`);
-            continue;
-          }
-          const adjustedMatch = {
-            ...update.match,
-            start: update.match.start + positionOffset,
-            end: update.match.end + positionOffset
-          };
-          this.updateReference(editor, view, adjustedMatch, update.newPath);
-          new import_obsidian3.Notice(`Rounded image saved: ${update.newPath}`, 1500);
-          const oldLength = update.match.end - update.match.start;
-          const newPath = this.getRelativePathForNote(view, update.newPath);
-          const newRef = this.buildReference(update.match, newPath);
-          const newLength = newRef.length;
-          positionOffset += newLength - oldLength;
-        } catch (error) {
-          console.error(`Error verifying processed image ${update.newPath}:`, error);
-          new import_obsidian3.Notice(`Warning: Could not verify processed image ${update.newPath}`, 3e3);
-        }
-      }
-    }
-    this.storeLast(radius, unit);
+    await this.processImagesQueueFromMatches(view, refreshed, radius, unit, shadow, border);
+    return;
   }
   async getImagesInCurrentSubfolder(view) {
     if (!view.file)
@@ -951,7 +1123,7 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
   }
   extractImageReferences(content) {
     const imageRefs = [];
-    const mdRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+    const mdRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
     let mdMatch;
     while ((mdMatch = mdRegex.exec(content)) !== null) {
       imageRefs.push(mdMatch[2].trim());
@@ -1119,41 +1291,8 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     }
   }
   async processBulkImages(view, imageFiles, radius, unit, shadow, border) {
-    this.style.updateStyles(radius, unit, shadow, border);
-    let processedCount = 0;
-    const totalCount = imageFiles.length;
-    for (const imageFile of imageFiles) {
-      try {
-        const virtualMatch = {
-          lineNumber: 0,
-          start: 0,
-          end: imageFile.basename.length,
-          path: imageFile.path,
-          alt: imageFile.basename,
-          raw: imageFile.basename,
-          kind: "markdown"
-        };
-        const { blob, newPath } = await this.roundImageFile(imageFile, radius, unit, shadow, border);
-        await this.writeRoundedVersion(newPath, blob);
-        try {
-          const writtenFile = this.app.vault.getAbstractFileByPath(newPath);
-          if (!writtenFile || !(writtenFile instanceof import_obsidian3.TFile) || writtenFile.stat.size === 0) {
-            console.error(`Bulk processing: Failed to verify written file: ${newPath}`);
-            continue;
-          }
-        } catch (error) {
-          console.error(`Bulk processing: Error verifying written file ${newPath}:`, error);
-          continue;
-        }
-        processedCount++;
-        if (processedCount % 10 === 0 || processedCount === totalCount) {
-          new import_obsidian3.Notice(`Processed ${processedCount}/${totalCount} images`, 1e3);
-        }
-      } catch (err) {
-        console.error(`Failed to process image ${imageFile.path}:`, err);
-      }
-    }
-    new import_obsidian3.Notice(`Bulk processing complete: ${processedCount}/${totalCount} images processed`, 3e3);
+    await this.processImageFilesQueue(view, imageFiles, radius, unit, shadow, border);
+    return;
   }
   getRelativePathForNote(view, absolutePath) {
     var _a, _b, _c, _d;
@@ -1214,11 +1353,15 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     const mdRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
     let md;
     while ((md = mdRegex.exec(line)) !== null) {
+      const rawPath = (md[2] || "").trim();
+      const safePath = this.sanitizeImagePath(rawPath);
+      if (!safePath)
+        continue;
       matches.push({
         lineNumber,
         start: md.index,
         end: md.index + md[0].length,
-        path: md[2].trim(),
+        path: safePath,
         alt: (md[1] || "").trim(),
         raw: md[0],
         kind: "markdown"
@@ -1246,11 +1389,14 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
       const path2 = this.getAttr(raw, "src");
       if (!path2)
         continue;
+      const safePath = this.sanitizeImagePath(path2);
+      if (!safePath)
+        continue;
       matches.push({
         lineNumber,
         start: tag.index,
         end: tag.index + raw.length,
-        path: path2,
+        path: safePath,
         alt: (_a = this.getAttr(raw, "alt")) != null ? _a : "",
         raw,
         kind: "html"
@@ -1265,17 +1411,69 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
       return null;
     return ((_b = (_a = attr[2]) != null ? _a : attr[3]) != null ? _b : "").trim();
   }
+  sanitizeImagePath(raw) {
+    if (!raw)
+      return null;
+    let p = raw.trim();
+    try {
+      const mdMatch = /!\[[^\]]*\]\(([^)]+)\)/.exec(p);
+      if (mdMatch && mdMatch[1]) {
+        p = mdMatch[1].trim();
+      }
+    } catch (e) {
+    }
+    try {
+      const wikiMatch = /!\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/.exec(p);
+      if (wikiMatch && wikiMatch[1]) {
+        p = wikiMatch[1].trim();
+      }
+    } catch (e) {
+    }
+    if (p.includes("(") && p.includes(")")) {
+      const lastOpen = p.lastIndexOf("(");
+      const lastClose = p.indexOf(")", lastOpen + 1);
+      if (lastOpen >= 0 && lastClose > lastOpen) {
+        const inner = p.slice(lastOpen + 1, lastClose).trim();
+        if (/(\.(png|jpg|jpeg|gif|webp|bmp|svg))(\?|#|$)/i.test(inner)) {
+          p = inner;
+        }
+      }
+    }
+    p = p.replace(/\\+/g, "/");
+    try {
+      p = decodeURIComponent(p);
+    } catch (e) {
+    }
+    p = p.replace(/^\.\//, "");
+    const tokenMatchAll = p.match(/[^\s"'()]+\.(?:png|jpg|jpeg|gif|webp|bmp|svg)(?:[?#][^\s"'()]*)?/ig);
+    if (tokenMatchAll && tokenMatchAll.length > 0) {
+      p = tokenMatchAll[tokenMatchAll.length - 1];
+    }
+    const exts = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
+    let bestEnd = -1;
+    for (const ext of exts) {
+      const re = new RegExp(`\\.${ext}(?:[?#].*|$)`, "i");
+      const m = re.exec(p);
+      if (m && m.index + ("." + ext).length > bestEnd) {
+        bestEnd = m.index + ("." + ext).length;
+      }
+    }
+    if (bestEnd > 0)
+      p = p.slice(0, bestEnd);
+    if (/\n|\r/.test(p))
+      return null;
+    return p || null;
+  }
   resolveTFile(view, link) {
     var _a, _b, _c, _d;
     if (/^https?:/i.test(link))
       return null;
-    let decodedLink = decodeURIComponent(link);
+    const sanitized = this.sanitizeImagePath(link);
+    const candidate = sanitized != null ? sanitized : link;
+    let decodedLink = candidate;
     decodedLink = decodedLink.replace(/^\.\//, "");
     const base = (_b = (_a = view.file) == null ? void 0 : _a.path) != null ? _b : "";
     let file = this.app.metadataCache.getFirstLinkpathDest(decodedLink, base);
-    if (file)
-      return file;
-    file = this.app.metadataCache.getFirstLinkpathDest(decodedLink, base);
     if (file)
       return file;
     file = this.app.vault.getAbstractFileByPath(decodedLink);
@@ -1290,18 +1488,388 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     }
     return null;
   }
+  async ensureBackupFolder() {
+    try {
+      const backupFolder = this.app.vault.getAbstractFileByPath(this.BACKUP_FOLDER);
+      if (!backupFolder) {
+        await this.app.vault.createFolder(this.BACKUP_FOLDER);
+      }
+    } catch (error) {
+      console.warn("Failed to create backup folder:", error);
+    }
+  }
+  async createBackup(originalPath) {
+    await this.ensureBackupFolder();
+    const timestamp = Date.now();
+    const filename = path.basename(originalPath);
+    const backupPath = `${this.BACKUP_FOLDER}/${timestamp}-${filename}`;
+    try {
+      const originalFile = this.app.vault.getAbstractFileByPath(originalPath);
+      if (originalFile && originalFile instanceof import_obsidian3.TFile) {
+        const content = await this.app.vault.readBinary(originalFile);
+        await this.app.vault.createBinary(backupPath, content);
+        return backupPath;
+      }
+    } catch (error) {
+      console.error(`Failed to create backup for ${originalPath}:`, error);
+    }
+    return "";
+  }
+  async createLocalBackup(originalPath) {
+    const dirname2 = path.dirname(originalPath);
+    const filename = path.basename(originalPath);
+    const ext = path.extname(filename);
+    const base = path.basename(filename, ext);
+    const timestamp = Date.now();
+    const backupPath = dirname2 ? `${dirname2}/${base}.backup-${timestamp}${ext}` : `${base}.backup-${timestamp}${ext}`;
+    try {
+      const originalFile = this.app.vault.getAbstractFileByPath(originalPath);
+      if (originalFile && originalFile instanceof import_obsidian3.TFile) {
+        const content = await this.app.vault.readBinary(originalFile);
+        await this.app.vault.createBinary(backupPath, content);
+        console.log(`Created local backup: ${backupPath}`);
+        return backupPath;
+      }
+    } catch (error) {
+      console.error(`Failed to create local backup for ${originalPath}:`, error);
+    }
+    return "";
+  }
+  async restoreFromBackup(backupPath, targetPath) {
+    try {
+      const backupFile = this.app.vault.getAbstractFileByPath(backupPath);
+      if (backupFile && backupFile instanceof import_obsidian3.TFile) {
+        const content = await this.app.vault.readBinary(backupFile);
+        await this.app.vault.createBinary(targetPath, content);
+        return true;
+      }
+    } catch (error) {
+      console.error(`Failed to restore from backup ${backupPath}:`, error);
+    }
+    return false;
+  }
+  async clearLastActionBackups() {
+    if (!this.lastAction)
+      return;
+    for (const backupPath of this.lastAction.backupPaths) {
+      try {
+        const backupFile = this.app.vault.getAbstractFileByPath(backupPath);
+        if (backupFile && backupFile instanceof import_obsidian3.TFile) {
+          await this.app.vault.delete(backupFile);
+        }
+      } catch (error) {
+        console.warn(`Failed to delete backup ${backupPath}:`, error);
+      }
+    }
+    for (const localBackupPath of this.lastAction.localBackupPaths) {
+      try {
+        const localBackupFile = this.app.vault.getAbstractFileByPath(localBackupPath);
+        if (localBackupFile && localBackupFile instanceof import_obsidian3.TFile) {
+          await this.app.vault.delete(localBackupFile);
+          console.log(`Cleaned up local backup: ${localBackupPath}`);
+        }
+      } catch (error) {
+        console.warn(`Failed to delete local backup ${localBackupPath}:`, error);
+      }
+    }
+    this.lastAction = null;
+  }
+  async undoLastAction() {
+    if (!this.lastAction) {
+      new import_obsidian3.Notice("No action to undo", 2e3);
+      return;
+    }
+    let successCount = 0;
+    let failCount = 0;
+    for (let i = 0; i < this.lastAction.originalPaths.length; i++) {
+      const originalPath = this.lastAction.originalPaths[i];
+      let restored = false;
+      if (i < this.lastAction.backupPaths.length) {
+        const backupPath = this.lastAction.backupPaths[i];
+        if (await this.restoreFromBackup(backupPath, originalPath)) {
+          restored = true;
+        }
+      }
+      if (!restored && i < this.lastAction.localBackupPaths.length) {
+        const localBackupPath = this.lastAction.localBackupPaths[i];
+        if (await this.restoreFromBackup(localBackupPath, originalPath)) {
+          restored = true;
+          console.log(`Restored from local backup: ${localBackupPath}`);
+        }
+      }
+      if (restored) {
+        successCount++;
+      } else {
+        failCount++;
+      }
+    }
+    for (const newPath of this.lastAction.newPaths) {
+      try {
+        const processedFile = this.app.vault.getAbstractFileByPath(newPath);
+        if (processedFile && processedFile instanceof import_obsidian3.TFile) {
+          await this.app.vault.delete(processedFile);
+        }
+      } catch (error) {
+        console.warn(`Failed to delete processed image ${newPath}:`, error);
+        failCount++;
+      }
+    }
+    await this.clearLastActionBackups();
+    if (failCount === 0) {
+      new import_obsidian3.Notice(`Successfully undone last action (${successCount} images restored)`, 3e3);
+    } else {
+      new import_obsidian3.Notice(`Partially undone last action (${successCount} restored, ${failCount} failed)`, 3e3);
+    }
+  }
+  async confirmLastAction() {
+    if (!this.lastAction) {
+      new import_obsidian3.Notice("No action to confirm", 2e3);
+      return;
+    }
+    await this.clearLastActionBackups();
+    new import_obsidian3.Notice("Last action confirmed - backups cleaned up", 2e3);
+  }
+  async emergencyRecoveryScan() {
+    const allFiles = this.app.vault.getFiles();
+    const backupFiles = [];
+    const localBackupFiles = [];
+    for (const file of allFiles) {
+      if (file.path.startsWith(this.BACKUP_FOLDER + "/")) {
+        backupFiles.push(file);
+      } else if (file.name.includes(".backup-")) {
+        localBackupFiles.push(file);
+      }
+    }
+    const totalBackups = backupFiles.length + localBackupFiles.length;
+    if (totalBackups === 0) {
+      new import_obsidian3.Notice("No backup files found in vault", 3e3);
+      return;
+    }
+    const message = `Found ${totalBackups} backup files:
+\u2022 ${backupFiles.length} in hidden backup folder
+\u2022 ${localBackupFiles.length} local backups
+
+Check the console for detailed file list.`;
+    new import_obsidian3.Notice(message, 5e3);
+    console.log("=== EMERGENCY RECOVERY SCAN ===");
+    console.log("Hidden backup folder files:");
+    backupFiles.forEach((file) => console.log(`  ${file.path} (${file.stat.size} bytes)`));
+    console.log("Local backup files:");
+    localBackupFiles.forEach((file) => console.log(`  ${file.path} (${file.stat.size} bytes)`));
+    console.log("=== END RECOVERY SCAN ===");
+    console.log("To restore files manually:");
+    console.log("1. Identify the backup file you want to restore");
+    console.log("2. Copy it to replace the original file path");
+    console.log("3. Delete the backup file when done");
+  }
+  async forceCleanupAllBackups() {
+    const allFiles = this.app.vault.getFiles();
+    let deletedCount = 0;
+    for (const file of allFiles) {
+      if (file.path.startsWith(this.BACKUP_FOLDER + "/") || file.name.includes(".backup-")) {
+        try {
+          await this.app.vault.delete(file);
+          deletedCount++;
+        } catch (error) {
+          console.warn(`Failed to delete backup file: ${file.path}`, error);
+        }
+      }
+    }
+    this.lastAction = null;
+    if (deletedCount > 0) {
+      new import_obsidian3.Notice(`Cleaned up ${deletedCount} backup files`, 3e3);
+    } else {
+      new import_obsidian3.Notice("No backup files found to clean up", 2e3);
+    }
+  }
+  showActionConfirmationPopup() {
+    if (!this.lastAction)
+      return;
+    this.removeActionConfirmationPopup();
+    const popup = document.createElement("div");
+    popup.id = "rounded-frame-confirmation-popup";
+    popup.style.cssText = `
+			position: fixed;
+			top: 20px;
+			right: 20px;
+			background: var(--background-primary, #ffffff);
+			border: 2px solid var(--interactive-accent, #4a90e2);
+			border-radius: 8px;
+			padding: 16px;
+			box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+			z-index: 10000;
+			max-width: 350px;
+			font-family: var(--font-interface, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+			color: var(--text-normal, #333333);
+		`;
+    const title = document.createElement("div");
+    title.textContent = "\u2705 Image Processing Complete";
+    title.style.cssText = `
+			font-weight: bold;
+			font-size: 14px;
+			margin-bottom: 8px;
+			color: var(--text-accent, #4a90e2);
+		`;
+    const message = document.createElement("div");
+    const imageCount = this.lastAction.newPaths.length;
+    message.textContent = `Successfully processed ${imageCount} image${imageCount !== 1 ? "s" : ""}. Backups created for safety.`;
+    message.style.cssText = `
+			font-size: 13px;
+			margin-bottom: 12px;
+			line-height: 1.4;
+		`;
+    const question = document.createElement("div");
+    question.textContent = "Keep the changes or revert?";
+    question.style.cssText = `
+			font-size: 12px;
+			margin-bottom: 12px;
+			font-style: italic;
+			color: var(--text-muted, #888888);
+		`;
+    const buttonContainer = document.createElement("div");
+    buttonContainer.style.cssText = `
+			display: flex;
+			gap: 8px;
+			justify-content: flex-end;
+		`;
+    const confirmButton = document.createElement("button");
+    confirmButton.textContent = "\u2705 Confirm";
+    confirmButton.style.cssText = `
+			padding: 6px 12px;
+			background: var(--interactive-accent, #4a90e2);
+			color: var(--text-on-accent, #ffffff);
+			border: none;
+			border-radius: 4px;
+			cursor: pointer;
+			font-size: 12px;
+			font-weight: 500;
+			transition: background-color 0.2s;
+		`;
+    confirmButton.onmouseover = () => {
+      confirmButton.style.background = "var(--interactive-accent-hover, #357abd)";
+    };
+    confirmButton.onmouseout = () => {
+      confirmButton.style.background = "var(--interactive-accent, #4a90e2)";
+    };
+    confirmButton.onclick = async () => {
+      await this.confirmLastAction();
+      this.removeActionConfirmationPopup();
+    };
+    const undoButton = document.createElement("button");
+    undoButton.textContent = "\u21B6 Undo";
+    undoButton.style.cssText = `
+			padding: 6px 12px;
+			background: var(--background-modifier-error, #ff6b6b);
+			color: var(--text-on-accent, #ffffff);
+			border: none;
+			border-radius: 4px;
+			cursor: pointer;
+			font-size: 12px;
+			font-weight: 500;
+			transition: background-color 0.2s;
+		`;
+    undoButton.onmouseover = () => {
+      undoButton.style.background = "var(--background-modifier-error-hover, #ff5252)";
+    };
+    undoButton.onmouseout = () => {
+      undoButton.style.background = "var(--background-modifier-error, #ff6b6b)";
+    };
+    undoButton.onclick = async () => {
+      await this.undoLastAction();
+      this.removeActionConfirmationPopup();
+    };
+    const dismissButton = document.createElement("button");
+    dismissButton.textContent = "\u2715";
+    dismissButton.style.cssText = `
+			position: absolute;
+			top: 8px;
+			right: 8px;
+			background: none;
+			border: none;
+			cursor: pointer;
+			font-size: 16px;
+			color: var(--text-muted, #888888);
+			padding: 0;
+			width: 20px;
+			height: 20px;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+		`;
+    dismissButton.onclick = () => {
+      this.removeActionConfirmationPopup();
+    };
+    setTimeout(() => {
+      this.removeActionConfirmationPopup();
+    }, 3e4);
+    buttonContainer.appendChild(undoButton);
+    buttonContainer.appendChild(confirmButton);
+    popup.appendChild(dismissButton);
+    popup.appendChild(title);
+    popup.appendChild(message);
+    popup.appendChild(question);
+    popup.appendChild(buttonContainer);
+    document.body.appendChild(popup);
+    popup.style.opacity = "0";
+    popup.style.transform = "translateY(-10px)";
+    setTimeout(() => {
+      popup.style.transition = "all 0.3s ease";
+      popup.style.opacity = "1";
+      popup.style.transform = "translateY(0)";
+    }, 10);
+  }
+  removeActionConfirmationPopup() {
+    const existingPopup = document.getElementById("rounded-frame-confirmation-popup");
+    if (existingPopup) {
+      existingPopup.style.transition = "all 0.3s ease";
+      existingPopup.style.opacity = "0";
+      existingPopup.style.transform = "translateY(-10px)";
+      setTimeout(() => {
+        if (existingPopup.parentNode) {
+          existingPopup.parentNode.removeChild(existingPopup);
+        }
+      }, 300);
+    }
+  }
   async roundImageFile(file, radius, unit, shadow, border) {
     var _a, _b;
     const folder = (_b = (_a = file.parent) == null ? void 0 : _a.path) != null ? _b : "";
     const base = file.basename;
     const suffix = unit === "percent" ? `${radius}p` : `${radius}px`;
     const newPath = folder ? `${folder}/${base}-rounded-${suffix}.png` : `${base}-rounded-${suffix}.png`;
+    const tempPath = `${newPath}.processing-${Date.now()}`;
     try {
-      await this.roundImageWithPython(file.path, newPath, radius, unit, shadow, border);
-      const arrayBuffer = await this.app.vault.readBinary(this.app.vault.getAbstractFileByPath(newPath));
+      await this.roundImageWithPython(file.path, tempPath, radius, unit, shadow, border);
+      const tempFile = this.app.vault.getAbstractFileByPath(tempPath);
+      if (!tempFile || !(tempFile instanceof import_obsidian3.TFile)) {
+        throw new Error(`Failed to create temporary processed file: ${tempPath}`);
+      }
+      if (tempFile.stat.size === 0) {
+        throw new Error(`Processed file is empty: ${tempPath}`);
+      }
+      const arrayBuffer = await this.app.vault.readBinary(tempFile);
+      await this.writeRoundedVersion(newPath, new Blob([arrayBuffer], { type: "image/png" }));
+      try {
+        await this.app.vault.delete(tempFile);
+      } catch (e) {
+      }
       return { blob: new Blob([arrayBuffer], { type: "image/png" }), newPath };
     } catch (pythonError) {
-      return await this.roundImageWithCanvas(file, radius, unit);
+      try {
+        const tempFile = this.app.vault.getAbstractFileByPath(tempPath);
+        if (tempFile && tempFile instanceof import_obsidian3.TFile) {
+          await this.app.vault.delete(tempFile);
+        }
+      } catch (cleanupError) {
+        console.warn(`Failed to cleanup temporary file ${tempPath}:`, cleanupError);
+      }
+      try {
+        const result = await this.roundImageWithCanvas(file, radius, unit);
+        await this.writeRoundedVersion(newPath, result.blob);
+        return { blob: result.blob, newPath };
+      } catch (canvasError) {
+        throw new Error(`Image processing failed for ${file.path}. Python error: ${pythonError.message}, Canvas error: ${canvasError.message}`);
+      }
     }
   }
   async roundImageWithPython(inputPath, outputPath, radius, unit, shadow, border) {
@@ -1464,5 +2032,284 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
   }
   escapeAttr(value) {
     return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  async sleep(ms) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+  async appendDebugLog(event, details) {
+    try {
+      const timestamp = new Date().toISOString();
+      let entry = `[${timestamp}] ${event}`;
+      if (details) {
+        entry += `
+${JSON.stringify(details, null, 2)}`;
+      }
+      entry += `
+`;
+      const existing = this.app.vault.getAbstractFileByPath(this.DEBUG_LOG_PATH);
+      if (existing) {
+        const prev = await this.app.vault.read(existing);
+        await this.app.vault.modify(existing, prev + entry);
+      } else {
+        await this.app.vault.create(this.DEBUG_LOG_PATH, entry);
+      }
+    } catch (e) {
+      console.warn("Failed to write debug log:", e);
+    }
+  }
+  startProgressPopup(total) {
+    this.removeProgressPopup();
+    const popup = document.createElement("div");
+    popup.id = "rounded-frame-progress-popup";
+    popup.style.cssText = `
+			position: fixed;
+			top: 20px;
+			right: 20px;
+			background: var(--background-secondary, #f5f5f5);
+			border: 1px solid var(--background-modifier-border, #ccc);
+			border-radius: 8px;
+			padding: 12px 14px;
+			box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+			z-index: 10000;
+			min-width: 260px;
+			font-size: 12px;
+		`;
+    popup.innerHTML = `
+			<div style="font-weight:600;margin-bottom:6px;">Processing images\u2026</div>
+			<div id="rf-progress-text">0/${total} done (0 success, 0 failed)</div>
+			<div id="rf-progress-current" style="margin-top:6px;color:var(--text-muted,#888);"></div>
+		`;
+    document.body.appendChild(popup);
+    this.progressPopup = popup;
+  }
+  updateProgressPopup(done, success, failed, total, current) {
+    const popup = this.progressPopup;
+    if (!popup)
+      return;
+    const textEl = popup.querySelector("#rf-progress-text");
+    if (textEl)
+      textEl.textContent = `${done}/${total} done (${success} success, ${failed} failed)`;
+    const curEl = popup.querySelector("#rf-progress-current");
+    if (curEl)
+      curEl.textContent = current ? `Current: ${current}` : "";
+  }
+  finishProgressPopup(summary) {
+    const popup = this.progressPopup;
+    if (!popup)
+      return;
+    const textEl = popup.querySelector("#rf-progress-text");
+    if (textEl)
+      textEl.textContent = summary;
+    setTimeout(() => this.removeProgressPopup(), 1500);
+  }
+  removeProgressPopup() {
+    if (this.progressPopup && this.progressPopup.parentElement) {
+      this.progressPopup.parentElement.removeChild(this.progressPopup);
+    }
+    this.progressPopup = null;
+  }
+  async processImagesQueueFromMatches(view, refreshed, radius, unit, shadow, border) {
+    var _a, _b, _c, _d;
+    this.style.updateStyles(radius, unit, shadow, border);
+    const total = refreshed.length;
+    let done = 0, success = 0, failed = 0;
+    const originalPaths = [];
+    const backupPaths = [];
+    const localBackupPaths = [];
+    const newPaths = [];
+    this.startProgressPopup(total);
+    for (const m of refreshed) {
+      this.updateProgressPopup(done, success, failed, total, m.path);
+      await this.sleep(500);
+      try {
+        const file = this.resolveTFile(view, m.path);
+        if (!file) {
+          await this.appendDebugLog("FILE_NOT_FOUND", { path: m.path, mode: "note" });
+          failed++;
+          done++;
+          this.updateProgressPopup(done, success, failed, total);
+          continue;
+        }
+        try {
+          await this.app.vault.readBinary(file);
+        } catch (readErr) {
+          await this.appendDebugLog("READ_FAILED", { path: m.path, error: String(readErr) });
+          failed++;
+          done++;
+          this.updateProgressPopup(done, success, failed, total);
+          continue;
+        }
+        const hiddenBackup = await this.createBackup(file.path);
+        const localBackup = await this.createLocalBackup(file.path);
+        if (!hiddenBackup && !localBackup) {
+          await this.appendDebugLog("BACKUP_FAILED", { path: file.path });
+          failed++;
+          done++;
+          this.updateProgressPopup(done, success, failed, total);
+          continue;
+        }
+        try {
+          const { newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
+          const finalFile = this.app.vault.getAbstractFileByPath(newPath);
+          if (!finalFile || !(finalFile instanceof import_obsidian3.TFile) || finalFile.stat.size === 0) {
+            if (hiddenBackup) {
+              const f = this.app.vault.getAbstractFileByPath(hiddenBackup);
+              if (f)
+                await this.app.vault.delete(f);
+            }
+            if (localBackup) {
+              const f2 = this.app.vault.getAbstractFileByPath(localBackup);
+              if (f2)
+                await this.app.vault.delete(f2);
+            }
+            await this.appendDebugLog("PROCESSING_OUTPUT_INVALID", { source: file.path, output: newPath });
+            failed++;
+            done++;
+            this.updateProgressPopup(done, success, failed, total);
+            continue;
+          }
+          this.updateReference(view.editor, view, m, newPath);
+          originalPaths.push(file.path);
+          if (hiddenBackup)
+            backupPaths.push(hiddenBackup);
+          if (localBackup)
+            localBackupPaths.push(localBackup);
+          newPaths.push(newPath);
+          success++;
+        } catch (err) {
+          try {
+            if (hiddenBackup) {
+              const bf = this.app.vault.getAbstractFileByPath(hiddenBackup);
+              if (bf)
+                await this.app.vault.delete(bf);
+            }
+          } catch (e) {
+          }
+          try {
+            if (localBackup) {
+              const lbf = this.app.vault.getAbstractFileByPath(localBackup);
+              if (lbf)
+                await this.app.vault.delete(lbf);
+            }
+          } catch (e) {
+          }
+          await this.appendDebugLog("PROCESSING_EXCEPTION", { path: file.path, error: String((err == null ? void 0 : err.stack) || err) });
+          failed++;
+        }
+        done++;
+        this.updateProgressPopup(done, success, failed, total);
+      } catch (outer) {
+        await this.appendDebugLog("UNEXPECTED_FAILURE_NOTE", { path: m.path, error: String(outer) });
+        failed++;
+        done++;
+        this.updateProgressPopup(done, success, failed, total);
+      }
+    }
+    if (newPaths.length > 0) {
+      this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: (_b = (_a = view.file) == null ? void 0 : _a.path) != null ? _b : "", timestamp: Date.now() };
+      this.showActionConfirmationPopup();
+    }
+    this.finishProgressPopup(`Completed ${done}/${total}: ${success} success, ${failed} failed`);
+    if (failed > 0) {
+      await this.appendDebugLog("SUMMARY_NOTE", { total, success, failed, note: (_d = (_c = view.file) == null ? void 0 : _c.path) != null ? _d : "" });
+    }
+    this.storeLast(radius, unit);
+  }
+  async processImageFilesQueue(view, imageFiles, radius, unit, shadow, border) {
+    var _a, _b;
+    this.style.updateStyles(radius, unit, shadow, border);
+    const total = imageFiles.length;
+    let done = 0, success = 0, failed = 0;
+    const originalPaths = [];
+    const backupPaths = [];
+    const localBackupPaths = [];
+    const newPaths = [];
+    this.startProgressPopup(total);
+    for (const imageFile of imageFiles) {
+      this.updateProgressPopup(done, success, failed, total, imageFile.path);
+      await this.sleep(500);
+      try {
+        try {
+          await this.app.vault.readBinary(imageFile);
+        } catch (readErr) {
+          await this.appendDebugLog("READ_FAILED", { path: imageFile.path, error: String(readErr) });
+          failed++;
+          done++;
+          this.updateProgressPopup(done, success, failed, total);
+          continue;
+        }
+        const hiddenBackup = await this.createBackup(imageFile.path);
+        const localBackup = await this.createLocalBackup(imageFile.path);
+        if (!hiddenBackup && !localBackup) {
+          await this.appendDebugLog("BACKUP_FAILED", { path: imageFile.path });
+          failed++;
+          done++;
+          this.updateProgressPopup(done, success, failed, total);
+          continue;
+        }
+        try {
+          const { newPath } = await this.roundImageFile(imageFile, radius, unit, shadow, border);
+          const finalFile = this.app.vault.getAbstractFileByPath(newPath);
+          if (!finalFile || !(finalFile instanceof import_obsidian3.TFile) || finalFile.stat.size === 0) {
+            if (hiddenBackup) {
+              const f = this.app.vault.getAbstractFileByPath(hiddenBackup);
+              if (f)
+                await this.app.vault.delete(f);
+            }
+            if (localBackup) {
+              const f2 = this.app.vault.getAbstractFileByPath(localBackup);
+              if (f2)
+                await this.app.vault.delete(f2);
+            }
+            await this.appendDebugLog("PROCESSING_OUTPUT_INVALID", { source: imageFile.path, output: newPath });
+            failed++;
+            done++;
+            this.updateProgressPopup(done, success, failed, total);
+            continue;
+          }
+          originalPaths.push(imageFile.path);
+          if (hiddenBackup)
+            backupPaths.push(hiddenBackup);
+          if (localBackup)
+            localBackupPaths.push(localBackup);
+          newPaths.push(newPath);
+          success++;
+        } catch (err) {
+          try {
+            if (hiddenBackup) {
+              const bf = this.app.vault.getAbstractFileByPath(hiddenBackup);
+              if (bf)
+                await this.app.vault.delete(bf);
+            }
+          } catch (e) {
+          }
+          try {
+            if (localBackup) {
+              const lbf = this.app.vault.getAbstractFileByPath(localBackup);
+              if (lbf)
+                await this.app.vault.delete(lbf);
+            }
+          } catch (e) {
+          }
+          await this.appendDebugLog("PROCESSING_EXCEPTION", { path: imageFile.path, error: String((err == null ? void 0 : err.stack) || err) });
+          failed++;
+        }
+        done++;
+        this.updateProgressPopup(done, success, failed, total);
+      } catch (outer) {
+        await this.appendDebugLog("UNEXPECTED_FAILURE_BULK", { path: imageFile.path, error: String(outer) });
+        failed++;
+        done++;
+        this.updateProgressPopup(done, success, failed, total);
+      }
+    }
+    if (newPaths.length > 0) {
+      this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: (_b = (_a = view == null ? void 0 : view.file) == null ? void 0 : _a.path) != null ? _b : "", timestamp: Date.now() };
+      this.showActionConfirmationPopup();
+    }
+    this.finishProgressPopup(`Completed ${done}/${total}: ${success} success, ${failed} failed`);
+    if (failed > 0) {
+      await this.appendDebugLog("SUMMARY_BULK", { total, success, failed });
+    }
   }
 };
