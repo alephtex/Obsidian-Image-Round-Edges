@@ -704,18 +704,30 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
   async getReferencedImagesInFolder(folder) {
     const referencedImages = [];
     const markdownFiles = this.getMarkdownFilesInFolder(folder);
+    console.log(`Scanning ${markdownFiles.length} markdown files in folder ${folder.path}`);
     for (const mdFile of markdownFiles) {
       const content = await this.readFileContent(mdFile);
-      if (!content)
+      if (!content) {
+        console.log(`Could not read content of ${mdFile.path}`);
         continue;
+      }
+      console.log(`Processing ${mdFile.path}, content length: ${content.length}`);
       const imageRefs = this.extractImageReferences(content);
+      console.log(`Found ${imageRefs.length} image references in ${mdFile.path}:`, imageRefs);
       for (const imagePath of imageRefs) {
+        console.log(`Resolving image path: ${imagePath} from ${mdFile.path}`);
         const resolvedFile = this.resolveImageFile(imagePath, mdFile);
-        if (resolvedFile && !referencedImages.some((img) => img.path === resolvedFile.path)) {
-          referencedImages.push(resolvedFile);
+        if (resolvedFile) {
+          console.log(`Resolved to: ${resolvedFile.path}`);
+          if (!referencedImages.some((img) => img.path === resolvedFile.path)) {
+            referencedImages.push(resolvedFile);
+          }
+        } else {
+          console.log(`Could not resolve: ${imagePath}`);
         }
       }
     }
+    console.log(`Total referenced images found: ${referencedImages.length}`);
     return referencedImages;
   }
   getPhysicalImagesInFolder(folder) {
@@ -755,42 +767,63 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
   }
   extractImageReferences(content) {
     const imageRefs = [];
-    const mdRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
+    console.log("Extracting image references from content...");
+    const mdRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
     let mdMatch;
     while ((mdMatch = mdRegex.exec(content)) !== null) {
-      imageRefs.push(mdMatch[2].trim());
+      const path2 = mdMatch[2].trim();
+      console.log(`Found markdown image: ${path2}`);
+      imageRefs.push(path2);
     }
     const wikiRegex = /!\[\[([^|\]]+)(?:\|([^\]]+))?\]\]/g;
     let wikiMatch;
     while ((wikiMatch = wikiRegex.exec(content)) !== null) {
-      imageRefs.push(wikiMatch[1].trim());
+      const path2 = wikiMatch[1].trim();
+      console.log(`Found wikilink image: ${path2}`);
+      imageRefs.push(path2);
     }
     const htmlRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
     let htmlMatch;
     while ((htmlMatch = htmlRegex.exec(content)) !== null) {
-      imageRefs.push(htmlMatch[1].trim());
+      const path2 = htmlMatch[1].trim();
+      console.log(`Found HTML image: ${path2}`);
+      imageRefs.push(path2);
     }
+    console.log(`Total image references found: ${imageRefs.length}`);
     return imageRefs;
   }
   resolveImageFile(imagePath, sourceFile) {
     var _a;
-    if (imagePath.startsWith("/")) {
+    console.log(`Resolving image path: "${imagePath}" from source: "${sourceFile.path}"`);
+    let decodedPath;
+    try {
+      decodedPath = decodeURIComponent(imagePath);
+      console.log(`URL-decoded path: "${decodedPath}"`);
+    } catch (error) {
+      console.log(`Could not URL-decode path, using original: "${imagePath}"`);
+      decodedPath = imagePath;
+    }
+    if (decodedPath.startsWith("/")) {
       try {
-        return this.app.vault.getAbstractFileByPath(imagePath.substring(1));
-      } catch (e) {
+        const resolved = this.app.vault.getAbstractFileByPath(decodedPath.substring(1));
+        console.log(`Resolved absolute path to: ${(resolved == null ? void 0 : resolved.path) || "null"}`);
+        return resolved || null;
+      } catch (error) {
+        console.log(`Error resolving absolute path: ${error}`);
         return null;
       }
     }
-    if (imagePath.startsWith("./") || imagePath.startsWith("../") || !imagePath.includes("/")) {
+    if (decodedPath.startsWith("./") || decodedPath.startsWith("../") || !decodedPath.includes("/")) {
       const sourceDir = ((_a = sourceFile.parent) == null ? void 0 : _a.path) || "";
-      let resolvedPath = imagePath;
-      if (imagePath.startsWith("./")) {
-        resolvedPath = sourceDir ? `${sourceDir}/${imagePath.substring(2)}` : imagePath.substring(2);
-      } else if (!imagePath.includes("/")) {
-        resolvedPath = sourceDir ? `${sourceDir}/${imagePath}` : imagePath;
+      console.log(`Source directory: "${sourceDir}"`);
+      let resolvedPath = decodedPath;
+      if (decodedPath.startsWith("./")) {
+        resolvedPath = sourceDir ? `${sourceDir}/${decodedPath.substring(2)}` : decodedPath.substring(2);
+      } else if (!decodedPath.includes("/")) {
+        resolvedPath = sourceDir ? `${sourceDir}/${decodedPath}` : decodedPath;
       } else {
         let currentDir = sourceDir;
-        let relPath = imagePath;
+        let relPath = decodedPath;
         while (relPath.startsWith("../")) {
           const parentDir = currentDir.substring(0, currentDir.lastIndexOf("/"));
           currentDir = parentDir || "";
@@ -798,16 +831,22 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
         }
         resolvedPath = currentDir ? `${currentDir}/${relPath}` : relPath;
       }
+      console.log(`Constructed resolved path: "${resolvedPath}"`);
       try {
         const file = this.app.vault.getAbstractFileByPath(resolvedPath);
+        console.log(`File resolved to: ${(file == null ? void 0 : file.path) || "null"}`);
         return file || null;
-      } catch (e) {
+      } catch (error) {
+        console.log(`Error resolving relative path: ${error}`);
         return null;
       }
     }
     try {
-      return this.app.vault.getAbstractFileByPath(imagePath);
-    } catch (e) {
+      const file = this.app.vault.getAbstractFileByPath(decodedPath);
+      console.log(`Resolved other path to: ${(file == null ? void 0 : file.path) || "null"}`);
+      return file || null;
+    } catch (error) {
+      console.log(`Error resolving other path: ${error}`);
       return null;
     }
   }
