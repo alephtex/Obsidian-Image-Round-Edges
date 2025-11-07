@@ -156,8 +156,13 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			.rounded-frame-hidden{display:none;}
 			.rounded-frame-slider{width:100%;}
 			.rounded-frame-number{width:100%;}
-			.rounded-frame-preview{text-align:center;margin:16px 0;}
-			.rounded-frame-preview-img{max-width:220px;max-height:220px;border:2px solid var(--background-modifier-border);object-fit:contain;}
+			.rounded-frame-preview{display:flex;flex-direction:column;gap:16px;margin:16px 0;}
+			.rounded-frame-thumbnail-container{text-align:center;}
+			.rounded-frame-thumbnail-container h4{margin:0 0 8px 0;font-size:1em;}
+			.rounded-frame-preview-thumbnail{display:block;margin:0 auto;border-radius:4px;}
+			.rounded-frame-images-container{text-align:center;}
+			.rounded-frame-images-container h4{margin:0 0 8px 0;font-size:1em;}
+			.rounded-frame-preview-img{max-width:80px;max-height:80px;margin:2px;border:1px solid var(--background-modifier-border);object-fit:contain;border-radius:2px;}
 			.rounded-frame-button-row{display:flex;justify-content:flex-end;gap:10px;margin-top:16px;}
 			.rounded-frame-shadow-section, .rounded-frame-border-section{margin:12px 0;padding:12px;border:1px solid var(--background-modifier-border);border-radius:6px;}
 			.rounded-frame-control-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;}

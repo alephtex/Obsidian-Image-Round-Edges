@@ -168,16 +168,44 @@ export class RoundedFrameModal extends Modal {
 
 		const previewContainer = contentEl.createDiv('rounded-frame-preview');
 		let previewImages: HTMLImageElement[] = [];
+		let previewThumbnail: HTMLImageElement | null = null;
 
-		// Show multiple images if available, otherwise single image
+		// Show low-res thumbnail of first image for live preview
 		const imageSources = this.opts.imageSources || (this.opts.imageSrc ? [this.opts.imageSrc] : []);
+		if (imageSources.length > 0) {
+			const firstImageSrc = imageSources[0];
 
-		for (const src of imageSources) {
-			const img = previewContainer.createEl('img', {
-				attr: { src: src, alt: 'Preview image' },
+			// Create thumbnail container
+			const thumbnailContainer = previewContainer.createDiv('rounded-frame-thumbnail-container');
+			thumbnailContainer.createEl('h4', { text: 'Live Preview (Low-Res)' });
+
+			previewThumbnail = thumbnailContainer.createEl('img', {
+				attr: {
+					src: firstImageSrc,
+					alt: 'Preview thumbnail',
+					style: 'max-width: 150px; max-height: 150px; border: 1px solid var(--background-modifier-border);'
+				},
 			});
-			img.addClass('rounded-frame-preview-img');
-			previewImages.push(img);
+			previewThumbnail.addClass('rounded-frame-preview-thumbnail');
+
+			// Show original images below
+			const imagesContainer = previewContainer.createDiv('rounded-frame-images-container');
+			imagesContainer.createEl('h4', { text: 'Images to Process' });
+
+			for (const src of imageSources.slice(0, 4)) { // Show max 4 images
+				const img = imagesContainer.createEl('img', {
+					attr: { src: src, alt: 'Preview image' },
+				});
+				img.addClass('rounded-frame-preview-img');
+				previewImages.push(img);
+			}
+
+			if (imageSources.length > 4) {
+				imagesContainer.createEl('span', {
+					text: `... and ${imageSources.length - 4} more images`,
+					attr: { style: 'font-size: 0.8em; color: var(--text-muted);' }
+				});
+			}
 		}
 
 		const buttonRow = contentEl.createDiv('rounded-frame-button-row');
@@ -245,6 +273,50 @@ export class RoundedFrameModal extends Modal {
 					calcRadius();
 				} else {
 					img.addEventListener('load', calcRadius, { once: true });
+				}
+			}
+
+			// Update thumbnail with current settings
+			if (previewThumbnail) {
+				const updateThumbnail = () => {
+					const w = previewThumbnail!.naturalWidth || previewThumbnail!.width || previewThumbnail!.offsetWidth;
+					const h = previewThumbnail!.naturalHeight || previewThumbnail!.height || previewThumbnail!.offsetHeight;
+					if (!w || !h) return;
+
+					// Use smaller dimension for symmetric rounding
+					const baseDimension = Math.min(w, h);
+					const maxRadius = baseDimension / 2;
+
+					let radiusPx: number;
+					if (this.unit === 'percent') {
+						radiusPx = (percentRadius / 100) * baseDimension;
+					} else {
+						radiusPx = pixelRadius;
+					}
+					radiusPx = Math.min(radiusPx, maxRadius);
+
+					// Apply all styles to thumbnail
+					previewThumbnail!.style.borderRadius = Math.max(0, radiusPx) + 'px';
+
+					// Apply shadow if enabled
+					if (this.shadow.enabled) {
+						previewThumbnail!.style.boxShadow = `${this.shadow.offset}px ${this.shadow.offset}px ${this.shadow.blur}px ${this.shadow.color}`;
+					} else {
+						previewThumbnail!.style.boxShadow = '';
+					}
+
+					// Apply border if enabled
+					if (this.border.enabled) {
+						previewThumbnail!.style.border = `${this.border.width}px ${this.border.style} ${this.border.color}`;
+					} else {
+						previewThumbnail!.style.border = '1px solid var(--background-modifier-border)';
+					}
+				};
+
+				if (previewThumbnail.complete) {
+					updateThumbnail();
+				} else {
+					previewThumbnail.addEventListener('load', updateThumbnail, { once: true });
 				}
 			}
 		};

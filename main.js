@@ -310,13 +310,35 @@ var RoundedFrameModal = class extends import_obsidian2.Modal {
     pixelInput.value = String(pixelRadius);
     const previewContainer = contentEl.createDiv("rounded-frame-preview");
     let previewImages = [];
+    let previewThumbnail = null;
     const imageSources = this.opts.imageSources || (this.opts.imageSrc ? [this.opts.imageSrc] : []);
-    for (const src of imageSources) {
-      const img = previewContainer.createEl("img", {
-        attr: { src, alt: "Preview image" }
+    if (imageSources.length > 0) {
+      const firstImageSrc = imageSources[0];
+      const thumbnailContainer = previewContainer.createDiv("rounded-frame-thumbnail-container");
+      thumbnailContainer.createEl("h4", { text: "Live Preview (Low-Res)" });
+      previewThumbnail = thumbnailContainer.createEl("img", {
+        attr: {
+          src: firstImageSrc,
+          alt: "Preview thumbnail",
+          style: "max-width: 150px; max-height: 150px; border: 1px solid var(--background-modifier-border);"
+        }
       });
-      img.addClass("rounded-frame-preview-img");
-      previewImages.push(img);
+      previewThumbnail.addClass("rounded-frame-preview-thumbnail");
+      const imagesContainer = previewContainer.createDiv("rounded-frame-images-container");
+      imagesContainer.createEl("h4", { text: "Images to Process" });
+      for (const src of imageSources.slice(0, 4)) {
+        const img = imagesContainer.createEl("img", {
+          attr: { src, alt: "Preview image" }
+        });
+        img.addClass("rounded-frame-preview-img");
+        previewImages.push(img);
+      }
+      if (imageSources.length > 4) {
+        imagesContainer.createEl("span", {
+          text: `... and ${imageSources.length - 4} more images`,
+          attr: { style: "font-size: 0.8em; color: var(--text-muted);" }
+        });
+      }
     }
     const buttonRow = contentEl.createDiv("rounded-frame-button-row");
     const undoBtn = buttonRow.createEl("button", { text: "Undo" });
@@ -369,6 +391,39 @@ var RoundedFrameModal = class extends import_obsidian2.Modal {
           calcRadius();
         } else {
           img.addEventListener("load", calcRadius, { once: true });
+        }
+      }
+      if (previewThumbnail) {
+        const updateThumbnail = () => {
+          const w = previewThumbnail.naturalWidth || previewThumbnail.width || previewThumbnail.offsetWidth;
+          const h = previewThumbnail.naturalHeight || previewThumbnail.height || previewThumbnail.offsetHeight;
+          if (!w || !h)
+            return;
+          const baseDimension = Math.min(w, h);
+          const maxRadius = baseDimension / 2;
+          let radiusPx;
+          if (this.unit === "percent") {
+            radiusPx = percentRadius / 100 * baseDimension;
+          } else {
+            radiusPx = pixelRadius;
+          }
+          radiusPx = Math.min(radiusPx, maxRadius);
+          previewThumbnail.style.borderRadius = Math.max(0, radiusPx) + "px";
+          if (this.shadow.enabled) {
+            previewThumbnail.style.boxShadow = `${this.shadow.offset}px ${this.shadow.offset}px ${this.shadow.blur}px ${this.shadow.color}`;
+          } else {
+            previewThumbnail.style.boxShadow = "";
+          }
+          if (this.border.enabled) {
+            previewThumbnail.style.border = `${this.border.width}px ${this.border.style} ${this.border.color}`;
+          } else {
+            previewThumbnail.style.border = "1px solid var(--background-modifier-border)";
+          }
+        };
+        if (previewThumbnail.complete) {
+          updateThumbnail();
+        } else {
+          previewThumbnail.addEventListener("load", updateThumbnail, { once: true });
         }
       }
     };
@@ -648,8 +703,13 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
 			.rounded-frame-hidden{display:none;}
 			.rounded-frame-slider{width:100%;}
 			.rounded-frame-number{width:100%;}
-			.rounded-frame-preview{text-align:center;margin:16px 0;}
-			.rounded-frame-preview-img{max-width:220px;max-height:220px;border:2px solid var(--background-modifier-border);object-fit:contain;}
+			.rounded-frame-preview{display:flex;flex-direction:column;gap:16px;margin:16px 0;}
+			.rounded-frame-thumbnail-container{text-align:center;}
+			.rounded-frame-thumbnail-container h4{margin:0 0 8px 0;font-size:1em;}
+			.rounded-frame-preview-thumbnail{display:block;margin:0 auto;border-radius:4px;}
+			.rounded-frame-images-container{text-align:center;}
+			.rounded-frame-images-container h4{margin:0 0 8px 0;font-size:1em;}
+			.rounded-frame-preview-img{max-width:80px;max-height:80px;margin:2px;border:1px solid var(--background-modifier-border);object-fit:contain;border-radius:2px;}
 			.rounded-frame-button-row{display:flex;justify-content:flex-end;gap:10px;margin-top:16px;}
 			.rounded-frame-shadow-section, .rounded-frame-border-section{margin:12px 0;padding:12px;border:1px solid var(--background-modifier-border);border-radius:6px;}
 			.rounded-frame-control-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
