@@ -13,6 +13,14 @@ An Obsidian plugin that allows you to apply rounded corners to images in your no
 - Supports Markdown images, Wikilinks, and HTML img tags
 - Uses Python PIL/Pillow for robust image processing with Canvas API fallback
 
+### ✨ New Features (v1.1.0)
+
+- **Live Preview**: See all affected images simultaneously in the modal
+- **Shadow Effects**: Add customizable box shadows to images
+- **Border Effects**: Add customizable borders around images
+- **Undo/Redo**: Experimental undo/redo functionality in the modal
+- **Enhanced Settings**: Configure shadow and border defaults
+
 ## Requirements
 
 - **Obsidian**: v0.12.0 or higher
