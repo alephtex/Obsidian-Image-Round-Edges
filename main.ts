@@ -278,7 +278,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 					continue;
 				}
 
-				const { blob, newPath } = await this.roundImageFile(file, radius, unit);
+				const { blob, newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
 				await this.writeRoundedVersion(newPath, blob);
 
 				// Verify the file was actually written and is accessible
@@ -676,7 +676,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 					kind: 'markdown'
 				};
 
-				const { blob, newPath } = await this.roundImageFile(imageFile, radius, unit);
+				const { blob, newPath } = await this.roundImageFile(imageFile, radius, unit, shadow, border);
 				await this.writeRoundedVersion(newPath, blob);
 
 				// Verify the file was actually written and is accessible
@@ -865,7 +865,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		return null;
 	}
 
-	private async roundImageFile(file: TFile, radius: number, unit: RadiusUnit): Promise<{ blob: Blob; newPath: string }> {
+	private async roundImageFile(file: TFile, radius: number, unit: RadiusUnit, shadow?: ShadowOptions, border?: BorderOptions): Promise<{ blob: Blob; newPath: string }> {
 		const folder = file.parent?.path ?? '';
 		const base = file.basename;
 		const suffix = unit === 'percent' ? `${radius}p` : `${radius}px`;
@@ -873,7 +873,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 		// Try Python first, fallback to Canvas
 		try {
-			await this.roundImageWithPython(file.path, newPath, radius, unit);
+			await this.roundImageWithPython(file.path, newPath, radius, unit, shadow, border);
 			// Read the result
 			const arrayBuffer = await this.app.vault.readBinary(this.app.vault.getAbstractFileByPath(newPath) as TFile);
 			return { blob: new Blob([arrayBuffer], { type: 'image/png' }), newPath };
@@ -883,7 +883,8 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		}
 	}
 
-	private async roundImageWithPython(inputPath: string, outputPath: string, radius: number, unit: RadiusUnit): Promise<void> {
+	private async roundImageWithPython(inputPath: string, outputPath: string, radius: number, unit: RadiusUnit,
+		shadow?: ShadowOptions, border?: BorderOptions): Promise<void> {
 		const pythonScript = path.join(this.app.vault.configDir, 'plugins', 'image-rounded-frame', 'round_image.py');
 		// Use Obsidian's file system methods instead of direct path access
 		const inputFile = this.app.vault.getAbstractFileByPath(inputPath) as TFile;
@@ -913,7 +914,23 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			pythonCmd = 'python';
 		}
 
-		const command = `${pythonCmd} "${pythonScript}" "${fullInputPath}" "${fullOutputPath}" ${radius} ${unit}`;
+		// Build command with effects parameters if provided
+		let command = `${pythonCmd} "${pythonScript}" "${fullInputPath}" "${fullOutputPath}" ${radius} ${unit}`;
+
+		if (shadow || border) {
+			const shadowEnabled = shadow?.enabled ?? false;
+			const shadowColor = shadow?.color ?? '#000000';
+			const shadowBlur = shadow?.blur ?? 10;
+			const shadowOffset = shadow?.offset ?? 5;
+
+			const borderEnabled = border?.enabled ?? false;
+			const borderColor = border?.color ?? '#cccccc';
+			const borderWidth = border?.width ?? 2;
+			const borderStyle = border?.style ?? 'solid';
+
+			command += ` ${shadowEnabled} "${shadowColor}" ${shadowBlur} ${shadowOffset} ${borderEnabled} "${borderColor}" ${borderWidth} ${borderStyle}`;
+		}
+
 		const { stdout, stderr } = await execAsync(command, { timeout: 30000 });
 
 		if (stderr && !stdout.includes('SUCCESS')) {

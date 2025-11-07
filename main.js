@@ -760,7 +760,7 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
           new import_obsidian3.Notice(`Could not find file: ${m.path}`, 2e3);
           continue;
         }
-        const { blob, newPath } = await this.roundImageFile(file, radius, unit);
+        const { blob, newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
         await this.writeRoundedVersion(newPath, blob);
         try {
           const writtenFile = this.app.vault.getAbstractFileByPath(newPath);
@@ -1073,7 +1073,7 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
           raw: imageFile.basename,
           kind: "markdown"
         };
-        const { blob, newPath } = await this.roundImageFile(imageFile, radius, unit);
+        const { blob, newPath } = await this.roundImageFile(imageFile, radius, unit, shadow, border);
         await this.writeRoundedVersion(newPath, blob);
         try {
           const writtenFile = this.app.vault.getAbstractFileByPath(newPath);
@@ -1230,21 +1230,22 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     }
     return null;
   }
-  async roundImageFile(file, radius, unit) {
+  async roundImageFile(file, radius, unit, shadow, border) {
     var _a, _b;
     const folder = (_b = (_a = file.parent) == null ? void 0 : _a.path) != null ? _b : "";
     const base = file.basename;
     const suffix = unit === "percent" ? `${radius}p` : `${radius}px`;
     const newPath = folder ? `${folder}/${base}-rounded-${suffix}.png` : `${base}-rounded-${suffix}.png`;
     try {
-      await this.roundImageWithPython(file.path, newPath, radius, unit);
+      await this.roundImageWithPython(file.path, newPath, radius, unit, shadow, border);
       const arrayBuffer = await this.app.vault.readBinary(this.app.vault.getAbstractFileByPath(newPath));
       return { blob: new Blob([arrayBuffer], { type: "image/png" }), newPath };
     } catch (pythonError) {
       return await this.roundImageWithCanvas(file, radius, unit);
     }
   }
-  async roundImageWithPython(inputPath, outputPath, radius, unit) {
+  async roundImageWithPython(inputPath, outputPath, radius, unit, shadow, border) {
+    var _a, _b, _c, _d, _e, _f, _g, _h;
     const pythonScript = path.join(this.app.vault.configDir, "plugins", "image-rounded-frame", "round_image.py");
     const inputFile = this.app.vault.getAbstractFileByPath(inputPath);
     if (!inputFile)
@@ -1266,7 +1267,18 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     } catch (e) {
       pythonCmd = "python";
     }
-    const command = `${pythonCmd} "${pythonScript}" "${fullInputPath}" "${fullOutputPath}" ${radius} ${unit}`;
+    let command = `${pythonCmd} "${pythonScript}" "${fullInputPath}" "${fullOutputPath}" ${radius} ${unit}`;
+    if (shadow || border) {
+      const shadowEnabled = (_a = shadow == null ? void 0 : shadow.enabled) != null ? _a : false;
+      const shadowColor = (_b = shadow == null ? void 0 : shadow.color) != null ? _b : "#000000";
+      const shadowBlur = (_c = shadow == null ? void 0 : shadow.blur) != null ? _c : 10;
+      const shadowOffset = (_d = shadow == null ? void 0 : shadow.offset) != null ? _d : 5;
+      const borderEnabled = (_e = border == null ? void 0 : border.enabled) != null ? _e : false;
+      const borderColor = (_f = border == null ? void 0 : border.color) != null ? _f : "#cccccc";
+      const borderWidth = (_g = border == null ? void 0 : border.width) != null ? _g : 2;
+      const borderStyle = (_h = border == null ? void 0 : border.style) != null ? _h : "solid";
+      command += ` ${shadowEnabled} "${shadowColor}" ${shadowBlur} ${shadowOffset} ${borderEnabled} "${borderColor}" ${borderWidth} ${borderStyle}`;
+    }
     const { stdout, stderr } = await execAsync(command, { timeout: 3e4 });
     if (stderr && !stdout.includes("SUCCESS")) {
       throw new Error(`Python error: ${stderr}`);
