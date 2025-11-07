@@ -13,7 +13,12 @@ An Obsidian plugin that allows you to apply rounded corners to images in your no
 - Supports Markdown images, Wikilinks, and HTML img tags
 - Uses Python PIL/Pillow for robust image processing with Canvas API fallback
 
-### ✨ New Features (v1.1.0)
+### ✨ Latest Features (v1.2.0)
+
+- **Referenced Image Detection**: Finds and processes images linked in your notes (Markdown, Wikilinks, HTML)
+- **Smart Path Resolution**: Handles complex paths, URL encoding, and relative references
+- **Safety First**: Only updates note references after verifying processed images exist and are valid
+- **Error Recovery**: Atomic operations prevent broken links and maintain note integrity
 
 - **Live Preview**: See all affected images simultaneously in the modal
 - **Shadow Effects**: Add customizable box shadows to images
@@ -152,6 +157,16 @@ If you encounter any issues or have questions:
 - Ensure you're using the latest version of the plugin
 
 ## Changelog
+
+### v1.2.0
+- Added comprehensive referenced image detection - finds images linked in notes, not just physical files
+- Added multi-format support: Markdown `![alt](path)`, Wikilinks `![[path]]`, HTML `<img src>`
+- Added URL decoding for encoded paths (e.g., `%20` spaces, emojis)
+- Added intelligent path resolution with multiple strategies
+- Added safety verification: references only updated after confirming processed images exist
+- Added file existence and size validation before link updates
+- Added atomic operations with error recovery
+- Enhanced bulk processing with progress tracking and error isolation
 
 ### v1.1.0
 - Added live preview showing all affected images simultaneously
