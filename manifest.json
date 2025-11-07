@@ -1,0 +1,12 @@
+{
+	"id": "image-rounded-frame",
+	"name": "Image Rounded Frame",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Adds a context menu option to apply adjustable rounded borders to images",
+	"author": "steimer",
+	"authorUrl": "",
+	"fundingUrl": "",
+	"isDesktopOnly": false
+}
+

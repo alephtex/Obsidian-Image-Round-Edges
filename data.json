@@ -1,0 +1,9 @@
+{
+  "defaultUnit": "percent",
+  "defaultPercent": 25,
+  "defaultPx": 24,
+  "rememberLast": true,
+  "lastUnit": "percent",
+  "lastPercent": 25,
+  "lastPx": 24
+}

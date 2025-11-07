@@ -1,1 +1,0 @@
-# Obsidian-Image-Round-Edges
