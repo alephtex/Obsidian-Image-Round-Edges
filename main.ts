@@ -1097,9 +1097,17 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		// or if the standard resolution logic misses it for some reason.
 		const filename = path.basename(decodedLink);
 		const allFiles = this.app.vault.getFiles();
-		const match = allFiles.find(f => f.name === filename);
-		if (match) return match;
 		
+		// 1. Exact match by filename
+		const exactMatch = allFiles.find(f => f.name === filename);
+		if (exactMatch) return exactMatch;
+
+		// 2. Fuzzy / Partial match if exact failed (e.g. if the link has a slightly different extension or casing)
+		// This is aggressive but useful for finding "lost" images.
+		// We prioritize files that *end with* the filename to catch path mismatches.
+		const partialMatch = allFiles.find(f => f.name.toLowerCase() === filename.toLowerCase() || f.path.endsWith(filename));
+		if (partialMatch) return partialMatch;
+
 		return null;
 	}
 
