@@ -826,6 +826,7 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     this.BACKUP_FOLDER = ".obsidian-image-round-edges-backups";
     this.progressPopup = null;
     this.DEBUG_LOG_PATH = "image-rounded-frame-debug.log";
+    this.recentlyProcessed = /* @__PURE__ */ new Map();
   }
   async onload() {
     await this.loadSettings();
@@ -2386,6 +2387,10 @@ ${JSON.stringify(details, null, 2)}`;
             await this.updateAllVaultReferences(originalFile, newPaths[i], (view == null ? void 0 : view.file) || void 0);
           }
         }
+      } else {
+        for (const originalPath of originalPaths) {
+          this.refreshOpenNotes(originalPath);
+        }
       }
       this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: (_b = (_a = view == null ? void 0 : view.file) == null ? void 0 : _a.path) != null ? _b : "", timestamp: Date.now() };
       this.showActionConfirmationPopup();
@@ -2454,11 +2459,16 @@ ${JSON.stringify(details, null, 2)}`;
    * Watch Mode handler for newly created files
    */
   async handleFileCreated(file) {
-    var _a, _b;
     if (!SUPPORTED_EXTENSIONS.includes(file.extension.toLowerCase()))
       return;
     if (file.name.includes("-rounded-"))
       return;
+    const now = Date.now();
+    const lastProcessed = this.recentlyProcessed.get(file.path) || 0;
+    if (now - lastProcessed < 5e3) {
+      return;
+    }
+    this.recentlyProcessed.set(file.path, now);
     if (this.settings.watchFolders.trim().length > 0) {
       const folders = this.settings.watchFolders.split(",").map((f) => f.trim().toLowerCase());
       const filePath = file.path.toLowerCase();
@@ -2467,35 +2477,24 @@ ${JSON.stringify(details, null, 2)}`;
         return;
     }
     await this.appendDebugLog("WATCH_MODE_TRIGGERED", { path: file.path });
-    let isReferenced = false;
+    let targetViews = [];
     let attempts = 0;
     const filename = file.name;
-    while (attempts < 5 && !isReferenced) {
+    while (attempts < 10 && targetViews.length === 0) {
       const openMarkdownViews = this.app.workspace.getLeavesOfType("markdown").map((leaf) => leaf.view);
       for (const view of openMarkdownViews) {
         const content = view.editor.getValue();
         if (content.includes(filename)) {
-          isReferenced = true;
-          break;
+          targetViews.push(view);
         }
-        const refs = this.extractImageReferences(content);
-        for (const ref of refs) {
-          const resolved = this.app.metadataCache.getFirstLinkpathDest(ref, (_b = (_a = view.file) == null ? void 0 : _a.path) != null ? _b : "");
-          if (resolved && resolved.path === file.path) {
-            isReferenced = true;
-            break;
-          }
-        }
-        if (isReferenced)
-          break;
       }
-      if (!isReferenced) {
+      if (targetViews.length === 0) {
         await new Promise((resolve) => setTimeout(resolve, 500));
         attempts++;
       }
     }
-    if (!isReferenced) {
-      await this.appendDebugLog("WATCH_MODE_SKIPPED", { path: file.path, reason: "Not referenced in any open note after retries" });
+    if (targetViews.length === 0) {
+      await this.appendDebugLog("WATCH_MODE_SKIPPED", { path: file.path, reason: "Not found in any open note after 5s" });
       return;
     }
     const radius = this.settings.defaultUnit === "percent" ? this.settings.defaultPercent : this.settings.defaultPx;
@@ -2513,16 +2512,16 @@ ${JSON.stringify(details, null, 2)}`;
       style: this.settings.borderStyle
     };
     try {
-      let attempts2 = 0;
+      let attemptsReady = 0;
       let ready = false;
-      while (attempts2 < 10) {
+      while (attemptsReady < 10) {
         const freshFile2 = this.app.vault.getAbstractFileByPath(file.path);
         if (freshFile2 && freshFile2 instanceof import_obsidian3.TFile && freshFile2.stat.size > 0) {
           ready = true;
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 500));
-        attempts2++;
+        attemptsReady++;
       }
       if (!ready) {
         await this.appendDebugLog("WATCH_MODE_FILE_NOT_READY", { path: file.path });
@@ -2532,9 +2531,27 @@ ${JSON.stringify(details, null, 2)}`;
       const result = await this.processSingleImage(freshFile, radius, unit, shadow, border);
       if (result.success && result.newPath) {
         if (this.settings.dualImageSystem) {
+          for (const view of targetViews) {
+            const lineCount = view.editor.lineCount();
+            for (let i = 0; i < lineCount; i++) {
+              const line = view.editor.getLine(i);
+              if (line.includes(filename)) {
+                const match = this.findMatchInLine(line, i, { targetSrc: filename });
+                if (match) {
+                  const finalPath = this.getRelativePathForNote(view, result.newPath, match.path);
+                  const processedPath = match.path.includes("%20") || match.path.includes(" ") ? finalPath.replace(/ /g, "%20") : finalPath;
+                  const replacement = this.buildReference(match, processedPath);
+                  view.editor.replaceRange(replacement, { line: i, ch: match.start }, { line: i, ch: match.end });
+                }
+              }
+            }
+          }
           await this.updateAllVaultReferences(freshFile, result.newPath);
           new import_obsidian3.Notice(`Watch Mode: Created rounded version of ${file.name}`, 3e3);
         } else {
+          for (const view of targetViews) {
+            this.refreshOpenNotes(freshFile.path);
+          }
           new import_obsidian3.Notice(`Watch Mode: Rounded original ${file.name}`, 3e3);
         }
       }

@@ -255,6 +255,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 	private readonly BACKUP_FOLDER = '.obsidian-image-round-edges-backups';
 	private progressPopup: HTMLElement | null = null;
 	private readonly DEBUG_LOG_PATH = 'image-rounded-frame-debug.log';
+	private recentlyProcessed = new Map<string, number>();
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -2096,6 +2097,11 @@ export default class ImageRoundedFramePlugin extends Plugin {
 						await this.updateAllVaultReferences(originalFile, newPaths[i], view?.file || undefined);
 					}
 				}
+			} else {
+				// Force refresh of open notes for all processed images in bulk
+				for (const originalPath of originalPaths) {
+					this.refreshOpenNotes(originalPath);
+				}
 			}
 			this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: view?.file?.path ?? '', timestamp: Date.now() };
 			this.showActionConfirmationPopup();
@@ -2175,8 +2181,15 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		// 1. Basic validation
 		if (!SUPPORTED_EXTENSIONS.includes(file.extension.toLowerCase())) return;
 
-		// 2. Prevent infinite loops (don't process files created by this plugin)
+		// 2. Prevent infinite loops and rapid re-triggers (debounce)
 		if (file.name.includes('-rounded-')) return;
+		
+		const now = Date.now();
+		const lastProcessed = this.recentlyProcessed.get(file.path) || 0;
+		if (now - lastProcessed < 5000) {
+			return; // Skip if processed in last 5 seconds
+		}
+		this.recentlyProcessed.set(file.path, now);
 
 		// 3. Folder filtering
 		if (this.settings.watchFolders.trim().length > 0) {
@@ -2188,50 +2201,36 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 		await this.appendDebugLog('WATCH_MODE_TRIGGERED', { path: file.path });
 
-		// 3.5 Only process if the file is referenced in an open markdown note
-		// This ensures we only process images the user is actually using right now
-		// We'll retry a few times as Obsidian might take a moment to insert the link
-		let isReferenced = false;
+		// 4. Identify which open note(s) contain this new image
+		// We retry a few times as Obsidian might take a moment to insert the link
+		let targetViews: MarkdownView[] = [];
 		let attempts = 0;
 		const filename = file.name;
 		
-		while (attempts < 5 && !isReferenced) {
+		while (attempts < 10 && targetViews.length === 0) {
 			const openMarkdownViews = this.app.workspace.getLeavesOfType('markdown')
 				.map(leaf => leaf.view as MarkdownView);
 			
 			for (const view of openMarkdownViews) {
 				const content = view.editor.getValue();
-				
-				// Quick string check first (fastest)
+				// Quick string check for the filename
 				if (content.includes(filename)) {
-					isReferenced = true;
-					break;
+					targetViews.push(view);
 				}
-				
-				// Then formal regex check
-				const refs = this.extractImageReferences(content);
-				for (const ref of refs) {
-					const resolved = this.app.metadataCache.getFirstLinkpathDest(ref, view.file?.path ?? '');
-					if (resolved && resolved.path === file.path) {
-						isReferenced = true;
-						break;
-					}
-				}
-				if (isReferenced) break;
 			}
 			
-			if (!isReferenced) {
+			if (targetViews.length === 0) {
 				await new Promise(resolve => setTimeout(resolve, 500));
 				attempts++;
 			}
 		}
 
-		if (!isReferenced) {
-			await this.appendDebugLog('WATCH_MODE_SKIPPED', { path: file.path, reason: 'Not referenced in any open note after retries' });
+		if (targetViews.length === 0) {
+			await this.appendDebugLog('WATCH_MODE_SKIPPED', { path: file.path, reason: 'Not found in any open note after 5s' });
 			return;
 		}
 
-		// 4. Processing logic (using default settings)
+		// 5. Processing logic (using default settings)
 		const radius = this.settings.defaultUnit === 'percent' ? this.settings.defaultPercent : this.settings.defaultPx;
 		const unit = this.settings.defaultUnit;
 		
@@ -2251,17 +2250,16 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 		try {
 			// Small delay to ensure file is fully written by the OS/Obsidian
-			// We'll wait up to 5 seconds, checking every 500ms if the file has size > 0
-			let attempts = 0;
+			let attemptsReady = 0;
 			let ready = false;
-			while (attempts < 10) {
+			while (attemptsReady < 10) {
 				const freshFile = this.app.vault.getAbstractFileByPath(file.path);
 				if (freshFile && freshFile instanceof TFile && freshFile.stat.size > 0) {
 					ready = true;
 					break;
 				}
 				await new Promise(resolve => setTimeout(resolve, 500));
-				attempts++;
+				attemptsReady++;
 			}
 
 			if (!ready) {
@@ -2270,15 +2268,34 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			}
 			
 			const freshFile = this.app.vault.getAbstractFileByPath(file.path) as TFile;
-
 			const result = await this.processSingleImage(freshFile, radius, unit, shadow, border);
 			
 			if (result.success && result.newPath) {
-				// Update references across vault if we created a NEW file
+				// 6. Update references in the target notes DIRECTLY via editor
 				if (this.settings.dualImageSystem) {
+					for (const view of targetViews) {
+						const lineCount = view.editor.lineCount();
+						for (let i = 0; i < lineCount; i++) {
+							const line = view.editor.getLine(i);
+							if (line.includes(filename)) {
+								const match = this.findMatchInLine(line, i, { targetSrc: filename });
+								if (match) {
+									const finalPath = this.getRelativePathForNote(view, result.newPath, match.path);
+									const processedPath = (match.path.includes('%20') || match.path.includes(' ')) ? finalPath.replace(/ /g, '%20') : finalPath;
+									const replacement = this.buildReference(match, processedPath);
+									view.editor.replaceRange(replacement, { line: i, ch: match.start }, { line: i, ch: match.end });
+								}
+							}
+						}
+					}
+					// Also update any other non-open notes just in case
 					await this.updateAllVaultReferences(freshFile, result.newPath);
 					new Notice(`Watch Mode: Created rounded version of ${file.name}`, 3000);
 				} else {
+					// Single image system: just force a refresh of the target notes
+					for (const view of targetViews) {
+						this.refreshOpenNotes(freshFile.path);
+					}
 					new Notice(`Watch Mode: Rounded original ${file.name}`, 3000);
 				}
 			}
