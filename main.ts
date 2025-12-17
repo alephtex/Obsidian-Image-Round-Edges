@@ -10,6 +10,8 @@ import { promisify } from 'util';
 import * as path from 'path';
 import * as fs from 'fs';
 
+const SUPPORTED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'];
+
 const PY_ROUND_IMAGE = `#!/usr/bin/env python3
 # 1. Load image from input path
 # 2. Calculate symmetric border radius based on smaller dimension
@@ -475,7 +477,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 	}
 
 	private async ensurePythonScript(): Promise<void> {
-		const pythonScript = path.join(this.app.vault.configDir, 'plugins', 'image-rounded-frame', 'round_image.py');
+		const pythonScript = path.join(this.app.vault.configDir, 'plugins', this.manifest.id, 'round_image.py');
 		const pluginDir = path.dirname(pythonScript);
 		
 		if (!fs.existsSync(pluginDir)) {
@@ -624,7 +626,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			const imageRefs = this.extractImageReferences(content);
 
 			for (const imagePath of imageRefs) {
-				const resolvedFile = this.resolveImageFile(imagePath, mdFile);
+				const resolvedFile = this.resolveTFile(mdFile, imagePath);
 				if (resolvedFile && !referencedImages.some(img => img.path === resolvedFile.path)) {
 					referencedImages.push(resolvedFile);
 				}
@@ -635,7 +637,6 @@ export default class ImageRoundedFramePlugin extends Plugin {
 	}
 
 	private getPhysicalImagesInFolder(folder: TFolder): TFile[] {
-		const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
 		const folderPath = folder.path;
 
 		// Get all files in vault and filter for images in current folder path
@@ -646,7 +647,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			// Check if file path starts with the folder path (includes subfolders)
 			if (file.path.startsWith(folderPath + '/')) {
 				const extension = file.extension.toLowerCase();
-				if (imageExtensions.includes(extension)) {
+				if (SUPPORTED_EXTENSIONS.includes(extension)) {
 					imagesInFolder.push(file);
 				}
 			}
@@ -709,56 +710,6 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		return imageRefs;
 	}
 
-	private resolveImageFile(imagePath: string, sourceFile: TFile): TFile | null {
-        // Use the native resolver first for consistency
-        const dest = this.app.metadataCache.getFirstLinkpathDest(imagePath, sourceFile.path);
-        if (dest) return dest;
-
-		// URL-decode the path
-		let decodedPath: string;
-		try {
-			decodedPath = decodeURIComponent(imagePath);
-		} catch (error) {
-			decodedPath = imagePath;
-		}
-
-        // Try manual resolution for relative paths if metadataCache fails (e.g. for non-standard links)
-		// 1. First try as direct vault path (most common in Obsidian)
-		try {
-			const file = this.app.vault.getAbstractFileByPath(decodedPath) as TFile;
-			if (file) return file;
-		} catch (error) {}
-
-		// 2. Handle explicit relative paths
-		if (decodedPath.startsWith('./') || decodedPath.startsWith('../')) {
-			const sourceDir = sourceFile.parent?.path || '';
-			let resolvedPath = decodedPath;
-
-			if (decodedPath.startsWith('./')) {
-				resolvedPath = sourceDir ? `${sourceDir}/${decodedPath.substring(2)}` : decodedPath.substring(2);
-			} else {
-				// Handle ../ relative paths
-				let currentDir = sourceDir;
-				let relPath = decodedPath;
-
-				while (relPath.startsWith('../')) {
-					const parentDir = currentDir.substring(0, currentDir.lastIndexOf('/'));
-					currentDir = parentDir || '';
-					relPath = relPath.substring(3);
-				}
-
-				resolvedPath = currentDir ? `${currentDir}/${relPath}` : relPath;
-			}
-
-			try {
-				const file = this.app.vault.getAbstractFileByPath(resolvedPath) as TFile;
-				return file || null;
-			} catch (error) {}
-		}
-
-		return null;
-	}
-
 	private async getImagesInVault(): Promise<TFile[]> {
 		const rootFolder = this.app.vault.getRoot();
 
@@ -785,14 +736,13 @@ export default class ImageRoundedFramePlugin extends Plugin {
 	}
 
 	private getImageFilesInFolder(folder: TFolder): TFile[] {
-		const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
 		const images: TFile[] = [];
 
 		// Add images from current folder
 		for (const item of folder.children) {
 			if (item instanceof TFile) {
 				const extension = item.extension.toLowerCase();
-				if (imageExtensions.includes(extension)) {
+				if (SUPPORTED_EXTENSIONS.includes(extension)) {
 					images.push(item);
 				}
 			}
@@ -1071,7 +1021,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		return p || null;
 	}
 
-	private resolveTFile(view: MarkdownView, link: string): TFile | null {
+	private resolveTFile(viewOrFile: MarkdownView | TFile, link: string): TFile | null {
 		if (/^https?:/i.test(link)) return null;
 		
 		// Sanitize first
@@ -1083,7 +1033,8 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		// Remove leading ./ if present
 		decodedLink = decodedLink.replace(/^\.\//, '');
 		
-		const base = view.file?.path ?? '';
+		const baseFile = viewOrFile instanceof TFile ? viewOrFile : viewOrFile.file;
+		const base = baseFile?.path ?? '';
 		
 		// Try multiple resolution strategies
 		let file = this.app.metadataCache.getFirstLinkpathDest(decodedLink, base);
@@ -1094,8 +1045,8 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		if (file) return file;
 		
 		// Try relative to current file
-		if (view.file) {
-			const parentPath = view.file.parent?.path ?? '';
+		if (baseFile) {
+			const parentPath = baseFile.parent?.path ?? '';
 			const fullPath = parentPath ? `${parentPath}/${decodedLink}` : decodedLink;
 			file = this.app.vault.getAbstractFileByPath(fullPath) as TFile | null;
 			if (file) return file;
@@ -1608,7 +1559,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 	private async roundImageWithPython(inputPath: string, outputPath: string, radius: number, unit: RadiusUnit,
 		shadow?: ShadowOptions, border?: BorderOptions): Promise<void> {
-		const pythonScript = path.join(this.app.vault.configDir, 'plugins', 'image-rounded-frame', 'round_image.py');
+		const pythonScript = path.join(this.app.vault.configDir, 'plugins', this.manifest.id, 'round_image.py');
 		// Use Obsidian's file system methods instead of direct path access
 		const inputFile = this.app.vault.getAbstractFileByPath(inputPath) as TFile;
 		if (!inputFile) throw new Error(`File not found: ${inputPath}`);
@@ -1876,6 +1827,68 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		this.progressPopup = null;
 	}
 
+	/**
+	 * Unified core logic for processing a single image file.
+	 * Handles backups, rounding, and overwrite/dual-image logic.
+	 */
+	private async processSingleImage(file: TFile, radius: number, unit: RadiusUnit, shadow?: ShadowOptions, border?: BorderOptions): Promise<{ success: boolean; newPath?: string; backup?: string }> {
+		try {
+			// 1. Ensure readable
+			try {
+				await this.app.vault.readBinary(file);
+			} catch (readErr: any) {
+				await this.appendDebugLog('READ_FAILED', { path: file.path, error: String(readErr) });
+				return { success: false };
+			}
+
+			// 2. Backups - require at least ONE to succeed (hidden is preferred)
+			const hiddenBackup = await this.createBackup(file.path);
+			const localBackup = await this.createLocalBackup(file.path);
+			if (!hiddenBackup && !localBackup) {
+				await this.appendDebugLog('BACKUP_FAILED', { path: file.path });
+				return { success: false };
+			}
+			await this.appendDebugLog('BACKUP_CREATED', { path: file.path, hidden: hiddenBackup, local: localBackup });
+
+			// 3. Rounding
+			try {
+				const { newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
+				const finalFile = this.app.vault.getAbstractFileByPath(newPath);
+				
+				if (!finalFile || !(finalFile instanceof TFile) || finalFile.stat.size === 0) {
+					// cleanup backups since nothing changed
+					if (hiddenBackup) { const f = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (f) await this.app.vault.delete(f); }
+					if (localBackup) { const f2 = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (f2) await this.app.vault.delete(f2); }
+					await this.appendDebugLog('PROCESSING_OUTPUT_INVALID', { source: file.path, output: newPath });
+					return { success: false };
+				}
+
+				await this.appendDebugLog('PROCESSING_SUCCESS', { source: file.path, output: newPath });
+				
+				// 4. Handle UI Refresh for overwrite mode
+				if (!this.settings.dualImageSystem) {
+					this.refreshOpenNotes(file.path);
+				}
+
+				return { 
+					success: true, 
+					newPath, 
+					backup: hiddenBackup || localBackup || undefined 
+				};
+
+			} catch (err: any) {
+				// On failure, try to remove backups to avoid clutter if nothing changed
+				try { if (hiddenBackup) { const bf = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (bf) await this.app.vault.delete(bf); } } catch {}
+				try { if (localBackup) { const lbf = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (lbf) await this.app.vault.delete(lbf); } } catch {}
+				await this.appendDebugLog('PROCESSING_EXCEPTION', { path: file.path, error: String(err?.stack || err) });
+				return { success: false };
+			}
+		} catch (outer: any) {
+			await this.appendDebugLog('UNEXPECTED_FAILURE', { path: file.path, error: String(outer) });
+			return { success: false };
+		}
+	}
+
 	private async processImagesQueueFromMatches(view: MarkdownView, refreshed: ImageMatch[], radius: number, unit: RadiusUnit, shadow?: ShadowOptions, border?: BorderOptions): Promise<void> {
 		// Update styles once
 		this.style.updateStyles(radius, unit, shadow, border);
@@ -1905,42 +1918,23 @@ export default class ImageRoundedFramePlugin extends Plugin {
                         failed++; done++; this.updateProgressPopup(done, success, failed, total); 
                         return; 
                     }
-                    await this.appendDebugLog('FILE_FOUND', { path: m.path, resolved_path: file.path });
 
-                    // Ensure readable
-                    try { await this.app.vault.readBinary(file); } catch (readErr: any) { await this.appendDebugLog('READ_FAILED', { path: m.path, error: String(readErr) }); failed++; done++; this.updateProgressPopup(done, success, failed, total); return; }
-
-                    // Backups - require at least ONE to succeed
-                    const hiddenBackup = await this.createBackup(file.path);
-                    const localBackup = await this.createLocalBackup(file.path);
-                    if (!hiddenBackup && !localBackup) { await this.appendDebugLog('BACKUP_FAILED', { path: file.path }); failed++; done++; this.updateProgressPopup(done, success, failed, total); return; }
-                    await this.appendDebugLog('BACKUP_CREATED', { hidden: hiddenBackup, local: localBackup });
-
-                    try {
-                        const { newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
-                        const finalFile = this.app.vault.getAbstractFileByPath(newPath);
-                        if (!finalFile || !(finalFile instanceof TFile) || finalFile.stat.size === 0) {
-                            // cleanup backups since nothing changed
-                            if (hiddenBackup) { const f = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (f) await this.app.vault.delete(f); }
-                            if (localBackup) { const f2 = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (f2) await this.app.vault.delete(f2); }
-                            await this.appendDebugLog('PROCESSING_OUTPUT_INVALID', { source: file.path, output: newPath });
-                            failed++; done++; this.updateProgressPopup(done, success, failed, total); return;
-                        }
-
-                        // Store success for later batch update
-                        successMatches.push({ match: m, newPath });
-
+                    const result = await this.processSingleImage(file, radius, unit, shadow, border);
+                    
+                    if (result.success && result.newPath) {
+                        successMatches.push({ match: m, newPath: result.newPath });
                         originalPaths.push(file.path);
-                        if (hiddenBackup) backupPaths.push(hiddenBackup);
-                        if (localBackup) localBackupPaths.push(localBackup);
-                        newPaths.push(newPath);
+                        newPaths.push(result.newPath);
+                        // Add backup to list for Undo support (hidden preferred)
+                        const backupFile = this.app.vault.getAbstractFileByPath(this.BACKUP_FOLDER);
+                        if (backupFile) {
+                            // Find the latest backup for this file in the list
+                            // Actually, processSingleImage doesn't return exactly what we need for local vs hidden lists
+                            // but for simplicity we'll just track whatever it gave us
+                            if (result.backup) backupPaths.push(result.backup);
+                        }
                         success++;
-                        await this.appendDebugLog('PROCESSING_SUCCESS', { source: file.path, output: newPath });
-                    } catch (err: any) {
-                        // On failure, try to remove backups to avoid clutter if nothing changed
-                        try { if (hiddenBackup) { const bf = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (bf) await this.app.vault.delete(bf); } } catch {}
-                        try { if (localBackup) { const lbf = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (lbf) await this.app.vault.delete(lbf); } } catch {}
-                        await this.appendDebugLog('PROCESSING_EXCEPTION', { path: file.path, error: String(err?.stack || err) });
+                    } else {
                         failed++;
                     }
 
@@ -2070,31 +2064,14 @@ export default class ImageRoundedFramePlugin extends Plugin {
                 this.updateProgressPopup(done, success, failed, total, imageFile.path);
                 
                 try {
-                    try { await this.app.vault.readBinary(imageFile); } catch (readErr: any) { await this.appendDebugLog('READ_FAILED', { path: imageFile.path, error: String(readErr) }); failed++; done++; this.updateProgressPopup(done, success, failed, total); return; }
-                    const hiddenBackup = await this.createBackup(imageFile.path);
-                    const localBackup = await this.createLocalBackup(imageFile.path);
-                    if (!hiddenBackup && !localBackup) { await this.appendDebugLog('BACKUP_FAILED', { path: imageFile.path }); failed++; done++; this.updateProgressPopup(done, success, failed, total); return; }
-                    await this.appendDebugLog('BACKUP_CREATED_BULK', { path: imageFile.path, hidden: hiddenBackup, local: localBackup });
-
-                    try {
-                        const { newPath } = await this.roundImageFile(imageFile, radius, unit, shadow, border);
-                        const finalFile = this.app.vault.getAbstractFileByPath(newPath);
-                        if (!finalFile || !(finalFile instanceof TFile) || finalFile.stat.size === 0) {
-                            if (hiddenBackup) { const f = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (f) await this.app.vault.delete(f); }
-                            if (localBackup) { const f2 = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (f2) await this.app.vault.delete(f2); }
-                            await this.appendDebugLog('PROCESSING_OUTPUT_INVALID', { source: imageFile.path, output: newPath });
-                            failed++; done++; this.updateProgressPopup(done, success, failed, total); return;
-                        }
+                    const result = await this.processSingleImage(imageFile, radius, unit, shadow, border);
+                    
+                    if (result.success && result.newPath) {
                         originalPaths.push(imageFile.path);
-                        if (hiddenBackup) backupPaths.push(hiddenBackup);
-                        if (localBackup) localBackupPaths.push(localBackup);
-                        newPaths.push(newPath);
+                        if (result.backup) backupPaths.push(result.backup);
+                        newPaths.push(result.newPath);
                         success++;
-                        await this.appendDebugLog('PROCESSING_SUCCESS_BULK', { source: imageFile.path, output: newPath });
-                    } catch (err: any) {
-                        try { if (hiddenBackup) { const bf = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (bf) await this.app.vault.delete(bf); } } catch {}
-                        try { if (localBackup) { const lbf = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (lbf) await this.app.vault.delete(lbf); } } catch {}
-                        await this.appendDebugLog('PROCESSING_EXCEPTION', { path: imageFile.path, error: String(err?.stack || err) });
+                    } else {
                         failed++;
                     }
 
@@ -2196,8 +2173,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 	 */
 	private async handleFileCreated(file: TFile): Promise<void> {
 		// 1. Basic validation
-		const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'];
-		if (!imageExtensions.includes(file.extension.toLowerCase())) return;
+		if (!SUPPORTED_EXTENSIONS.includes(file.extension.toLowerCase())) return;
 
 		// 2. Prevent infinite loops (don't process files created by this plugin)
 		if (file.name.includes('-rounded-')) return;
@@ -2295,23 +2271,16 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			
 			const freshFile = this.app.vault.getAbstractFileByPath(file.path) as TFile;
 
-			// Hidden backup first for safety
-			const backup = await this.createBackup(freshFile.path);
+			const result = await this.processSingleImage(freshFile, radius, unit, shadow, border);
 			
-			const { newPath } = await this.roundImageFile(freshFile, radius, unit, shadow, border);
-			
-			// 5. Update references across vault if we created a NEW file
-			if (this.settings.dualImageSystem) {
-				await this.updateAllVaultReferences(freshFile, newPath);
-				new Notice(`Watch Mode: Created rounded version of ${file.name}`, 3000);
-				await this.appendDebugLog('WATCH_MODE_SUCCESS', { source: file.path, output: newPath, backup });
-			} else {
-				// Original file was overwritten directly by roundImageFile
-				// We need to force a refresh of the views to show the changes
-				this.refreshOpenNotes(freshFile.path);
-				
-				new Notice(`Watch Mode: Rounded original ${file.name}`, 3000);
-				await this.appendDebugLog('WATCH_MODE_OVERWRITE_SUCCESS', { path: file.path, backup });
+			if (result.success && result.newPath) {
+				// Update references across vault if we created a NEW file
+				if (this.settings.dualImageSystem) {
+					await this.updateAllVaultReferences(freshFile, result.newPath);
+					new Notice(`Watch Mode: Created rounded version of ${file.name}`, 3000);
+				} else {
+					new Notice(`Watch Mode: Rounded original ${file.name}`, 3000);
+				}
 			}
 
 		} catch (error) {

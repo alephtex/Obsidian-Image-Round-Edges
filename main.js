@@ -602,6 +602,7 @@ var RoundedFrameModal = class extends import_obsidian2.Modal {
 };
 
 // main.ts
+var SUPPORTED_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
 var PY_ROUND_IMAGE = `#!/usr/bin/env python3
 # 1. Load image from input path
 # 2. Calculate symmetric border radius based on smaller dimension
@@ -1021,7 +1022,7 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     document.head.appendChild(style);
   }
   async ensurePythonScript() {
-    const pythonScript = path.join(this.app.vault.configDir, "plugins", "image-rounded-frame", "round_image.py");
+    const pythonScript = path.join(this.app.vault.configDir, "plugins", this.manifest.id, "round_image.py");
     const pluginDir = path.dirname(pythonScript);
     if (!fs.existsSync(pluginDir)) {
       fs.mkdirSync(pluginDir, { recursive: true });
@@ -1155,7 +1156,7 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
         continue;
       const imageRefs = this.extractImageReferences(content);
       for (const imagePath of imageRefs) {
-        const resolvedFile = this.resolveImageFile(imagePath, mdFile);
+        const resolvedFile = this.resolveTFile(mdFile, imagePath);
         if (resolvedFile && !referencedImages.some((img) => img.path === resolvedFile.path)) {
           referencedImages.push(resolvedFile);
         }
@@ -1164,14 +1165,13 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     return referencedImages;
   }
   getPhysicalImagesInFolder(folder) {
-    const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
     const folderPath = folder.path;
     const allFiles = this.app.vault.getFiles();
     const imagesInFolder = [];
     for (const file of allFiles) {
       if (file.path.startsWith(folderPath + "/")) {
         const extension = file.extension.toLowerCase();
-        if (imageExtensions.includes(extension)) {
+        if (SUPPORTED_EXTENSIONS.includes(extension)) {
           imagesInFolder.push(file);
         }
       }
@@ -1219,46 +1219,6 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     }
     return imageRefs;
   }
-  resolveImageFile(imagePath, sourceFile) {
-    var _a;
-    const dest = this.app.metadataCache.getFirstLinkpathDest(imagePath, sourceFile.path);
-    if (dest)
-      return dest;
-    let decodedPath;
-    try {
-      decodedPath = decodeURIComponent(imagePath);
-    } catch (error) {
-      decodedPath = imagePath;
-    }
-    try {
-      const file = this.app.vault.getAbstractFileByPath(decodedPath);
-      if (file)
-        return file;
-    } catch (error) {
-    }
-    if (decodedPath.startsWith("./") || decodedPath.startsWith("../")) {
-      const sourceDir = ((_a = sourceFile.parent) == null ? void 0 : _a.path) || "";
-      let resolvedPath = decodedPath;
-      if (decodedPath.startsWith("./")) {
-        resolvedPath = sourceDir ? `${sourceDir}/${decodedPath.substring(2)}` : decodedPath.substring(2);
-      } else {
-        let currentDir = sourceDir;
-        let relPath = decodedPath;
-        while (relPath.startsWith("../")) {
-          const parentDir = currentDir.substring(0, currentDir.lastIndexOf("/"));
-          currentDir = parentDir || "";
-          relPath = relPath.substring(3);
-        }
-        resolvedPath = currentDir ? `${currentDir}/${relPath}` : relPath;
-      }
-      try {
-        const file = this.app.vault.getAbstractFileByPath(resolvedPath);
-        return file || null;
-      } catch (error) {
-      }
-    }
-    return null;
-  }
   async getImagesInVault() {
     const rootFolder = this.app.vault.getRoot();
     const referencedImages = await this.getReferencedImagesInFolder(rootFolder);
@@ -1273,12 +1233,11 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     return Array.from(allImages.values());
   }
   getImageFilesInFolder(folder) {
-    const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
     const images = [];
     for (const item of folder.children) {
       if (item instanceof import_obsidian3.TFile) {
         const extension = item.extension.toLowerCase();
-        if (imageExtensions.includes(extension)) {
+        if (SUPPORTED_EXTENSIONS.includes(extension)) {
           images.push(item);
         }
       }
@@ -1529,23 +1488,24 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
       return null;
     return p || null;
   }
-  resolveTFile(view, link) {
-    var _a, _b, _c, _d;
+  resolveTFile(viewOrFile, link) {
+    var _a, _b, _c;
     if (/^https?:/i.test(link))
       return null;
     const sanitized = this.sanitizeImagePath(link);
     const candidate = sanitized != null ? sanitized : link;
     let decodedLink = candidate;
     decodedLink = decodedLink.replace(/^\.\//, "");
-    const base = (_b = (_a = view.file) == null ? void 0 : _a.path) != null ? _b : "";
+    const baseFile = viewOrFile instanceof import_obsidian3.TFile ? viewOrFile : viewOrFile.file;
+    const base = (_a = baseFile == null ? void 0 : baseFile.path) != null ? _a : "";
     let file = this.app.metadataCache.getFirstLinkpathDest(decodedLink, base);
     if (file)
       return file;
     file = this.app.vault.getAbstractFileByPath(decodedLink);
     if (file)
       return file;
-    if (view.file) {
-      const parentPath = (_d = (_c = view.file.parent) == null ? void 0 : _c.path) != null ? _d : "";
+    if (baseFile) {
+      const parentPath = (_c = (_b = baseFile.parent) == null ? void 0 : _b.path) != null ? _c : "";
       const fullPath = parentPath ? `${parentPath}/${decodedLink}` : decodedLink;
       file = this.app.vault.getAbstractFileByPath(fullPath);
       if (file)
@@ -1956,7 +1916,7 @@ Check the console for detailed file list.`;
   }
   async roundImageWithPython(inputPath, outputPath, radius, unit, shadow, border) {
     var _a, _b, _c, _d, _e, _f, _g, _h;
-    const pythonScript = path.join(this.app.vault.configDir, "plugins", "image-rounded-frame", "round_image.py");
+    const pythonScript = path.join(this.app.vault.configDir, "plugins", this.manifest.id, "round_image.py");
     const inputFile = this.app.vault.getAbstractFileByPath(inputPath);
     if (!inputFile)
       throw new Error(`File not found: ${inputPath}`);
@@ -2193,6 +2153,76 @@ ${JSON.stringify(details, null, 2)}`;
     }
     this.progressPopup = null;
   }
+  /**
+   * Unified core logic for processing a single image file.
+   * Handles backups, rounding, and overwrite/dual-image logic.
+   */
+  async processSingleImage(file, radius, unit, shadow, border) {
+    try {
+      try {
+        await this.app.vault.readBinary(file);
+      } catch (readErr) {
+        await this.appendDebugLog("READ_FAILED", { path: file.path, error: String(readErr) });
+        return { success: false };
+      }
+      const hiddenBackup = await this.createBackup(file.path);
+      const localBackup = await this.createLocalBackup(file.path);
+      if (!hiddenBackup && !localBackup) {
+        await this.appendDebugLog("BACKUP_FAILED", { path: file.path });
+        return { success: false };
+      }
+      await this.appendDebugLog("BACKUP_CREATED", { path: file.path, hidden: hiddenBackup, local: localBackup });
+      try {
+        const { newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
+        const finalFile = this.app.vault.getAbstractFileByPath(newPath);
+        if (!finalFile || !(finalFile instanceof import_obsidian3.TFile) || finalFile.stat.size === 0) {
+          if (hiddenBackup) {
+            const f = this.app.vault.getAbstractFileByPath(hiddenBackup);
+            if (f)
+              await this.app.vault.delete(f);
+          }
+          if (localBackup) {
+            const f2 = this.app.vault.getAbstractFileByPath(localBackup);
+            if (f2)
+              await this.app.vault.delete(f2);
+          }
+          await this.appendDebugLog("PROCESSING_OUTPUT_INVALID", { source: file.path, output: newPath });
+          return { success: false };
+        }
+        await this.appendDebugLog("PROCESSING_SUCCESS", { source: file.path, output: newPath });
+        if (!this.settings.dualImageSystem) {
+          this.refreshOpenNotes(file.path);
+        }
+        return {
+          success: true,
+          newPath,
+          backup: hiddenBackup || localBackup || void 0
+        };
+      } catch (err) {
+        try {
+          if (hiddenBackup) {
+            const bf = this.app.vault.getAbstractFileByPath(hiddenBackup);
+            if (bf)
+              await this.app.vault.delete(bf);
+          }
+        } catch (e) {
+        }
+        try {
+          if (localBackup) {
+            const lbf = this.app.vault.getAbstractFileByPath(localBackup);
+            if (lbf)
+              await this.app.vault.delete(lbf);
+          }
+        } catch (e) {
+        }
+        await this.appendDebugLog("PROCESSING_EXCEPTION", { path: file.path, error: String((err == null ? void 0 : err.stack) || err) });
+        return { success: false };
+      }
+    } catch (outer) {
+      await this.appendDebugLog("UNEXPECTED_FAILURE", { path: file.path, error: String(outer) });
+      return { success: false };
+    }
+  }
   async processImagesQueueFromMatches(view, refreshed, radius, unit, shadow, border) {
     var _a, _b, _c, _d;
     this.style.updateStyles(radius, unit, shadow, border);
@@ -2218,73 +2248,18 @@ ${JSON.stringify(details, null, 2)}`;
             this.updateProgressPopup(done, success, failed, total);
             return;
           }
-          await this.appendDebugLog("FILE_FOUND", { path: m.path, resolved_path: file.path });
-          try {
-            await this.app.vault.readBinary(file);
-          } catch (readErr) {
-            await this.appendDebugLog("READ_FAILED", { path: m.path, error: String(readErr) });
-            failed++;
-            done++;
-            this.updateProgressPopup(done, success, failed, total);
-            return;
-          }
-          const hiddenBackup = await this.createBackup(file.path);
-          const localBackup = await this.createLocalBackup(file.path);
-          if (!hiddenBackup && !localBackup) {
-            await this.appendDebugLog("BACKUP_FAILED", { path: file.path });
-            failed++;
-            done++;
-            this.updateProgressPopup(done, success, failed, total);
-            return;
-          }
-          await this.appendDebugLog("BACKUP_CREATED", { hidden: hiddenBackup, local: localBackup });
-          try {
-            const { newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
-            const finalFile = this.app.vault.getAbstractFileByPath(newPath);
-            if (!finalFile || !(finalFile instanceof import_obsidian3.TFile) || finalFile.stat.size === 0) {
-              if (hiddenBackup) {
-                const f = this.app.vault.getAbstractFileByPath(hiddenBackup);
-                if (f)
-                  await this.app.vault.delete(f);
-              }
-              if (localBackup) {
-                const f2 = this.app.vault.getAbstractFileByPath(localBackup);
-                if (f2)
-                  await this.app.vault.delete(f2);
-              }
-              await this.appendDebugLog("PROCESSING_OUTPUT_INVALID", { source: file.path, output: newPath });
-              failed++;
-              done++;
-              this.updateProgressPopup(done, success, failed, total);
-              return;
-            }
-            successMatches.push({ match: m, newPath });
+          const result = await this.processSingleImage(file, radius, unit, shadow, border);
+          if (result.success && result.newPath) {
+            successMatches.push({ match: m, newPath: result.newPath });
             originalPaths.push(file.path);
-            if (hiddenBackup)
-              backupPaths.push(hiddenBackup);
-            if (localBackup)
-              localBackupPaths.push(localBackup);
-            newPaths.push(newPath);
+            newPaths.push(result.newPath);
+            const backupFile = this.app.vault.getAbstractFileByPath(this.BACKUP_FOLDER);
+            if (backupFile) {
+              if (result.backup)
+                backupPaths.push(result.backup);
+            }
             success++;
-            await this.appendDebugLog("PROCESSING_SUCCESS", { source: file.path, output: newPath });
-          } catch (err) {
-            try {
-              if (hiddenBackup) {
-                const bf = this.app.vault.getAbstractFileByPath(hiddenBackup);
-                if (bf)
-                  await this.app.vault.delete(bf);
-              }
-            } catch (e) {
-            }
-            try {
-              if (localBackup) {
-                const lbf = this.app.vault.getAbstractFileByPath(localBackup);
-                if (lbf)
-                  await this.app.vault.delete(lbf);
-              }
-            } catch (e) {
-            }
-            await this.appendDebugLog("PROCESSING_EXCEPTION", { path: file.path, error: String((err == null ? void 0 : err.stack) || err) });
+          } else {
             failed++;
           }
           done++;
@@ -2382,71 +2357,14 @@ ${JSON.stringify(details, null, 2)}`;
       tasks.push(queue.add(async () => {
         this.updateProgressPopup(done, success, failed, total, imageFile.path);
         try {
-          try {
-            await this.app.vault.readBinary(imageFile);
-          } catch (readErr) {
-            await this.appendDebugLog("READ_FAILED", { path: imageFile.path, error: String(readErr) });
-            failed++;
-            done++;
-            this.updateProgressPopup(done, success, failed, total);
-            return;
-          }
-          const hiddenBackup = await this.createBackup(imageFile.path);
-          const localBackup = await this.createLocalBackup(imageFile.path);
-          if (!hiddenBackup && !localBackup) {
-            await this.appendDebugLog("BACKUP_FAILED", { path: imageFile.path });
-            failed++;
-            done++;
-            this.updateProgressPopup(done, success, failed, total);
-            return;
-          }
-          await this.appendDebugLog("BACKUP_CREATED_BULK", { path: imageFile.path, hidden: hiddenBackup, local: localBackup });
-          try {
-            const { newPath } = await this.roundImageFile(imageFile, radius, unit, shadow, border);
-            const finalFile = this.app.vault.getAbstractFileByPath(newPath);
-            if (!finalFile || !(finalFile instanceof import_obsidian3.TFile) || finalFile.stat.size === 0) {
-              if (hiddenBackup) {
-                const f = this.app.vault.getAbstractFileByPath(hiddenBackup);
-                if (f)
-                  await this.app.vault.delete(f);
-              }
-              if (localBackup) {
-                const f2 = this.app.vault.getAbstractFileByPath(localBackup);
-                if (f2)
-                  await this.app.vault.delete(f2);
-              }
-              await this.appendDebugLog("PROCESSING_OUTPUT_INVALID", { source: imageFile.path, output: newPath });
-              failed++;
-              done++;
-              this.updateProgressPopup(done, success, failed, total);
-              return;
-            }
+          const result = await this.processSingleImage(imageFile, radius, unit, shadow, border);
+          if (result.success && result.newPath) {
             originalPaths.push(imageFile.path);
-            if (hiddenBackup)
-              backupPaths.push(hiddenBackup);
-            if (localBackup)
-              localBackupPaths.push(localBackup);
-            newPaths.push(newPath);
+            if (result.backup)
+              backupPaths.push(result.backup);
+            newPaths.push(result.newPath);
             success++;
-            await this.appendDebugLog("PROCESSING_SUCCESS_BULK", { source: imageFile.path, output: newPath });
-          } catch (err) {
-            try {
-              if (hiddenBackup) {
-                const bf = this.app.vault.getAbstractFileByPath(hiddenBackup);
-                if (bf)
-                  await this.app.vault.delete(bf);
-              }
-            } catch (e) {
-            }
-            try {
-              if (localBackup) {
-                const lbf = this.app.vault.getAbstractFileByPath(localBackup);
-                if (lbf)
-                  await this.app.vault.delete(lbf);
-              }
-            } catch (e) {
-            }
-            await this.appendDebugLog("PROCESSING_EXCEPTION", { path: imageFile.path, error: String((err == null ? void 0 : err.stack) || err) });
+          } else {
             failed++;
           }
           done++;
@@ -2537,8 +2455,7 @@ ${JSON.stringify(details, null, 2)}`;
    */
   async handleFileCreated(file) {
     var _a, _b;
-    const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
-    if (!imageExtensions.includes(file.extension.toLowerCase()))
+    if (!SUPPORTED_EXTENSIONS.includes(file.extension.toLowerCase()))
       return;
     if (file.name.includes("-rounded-"))
       return;
@@ -2612,16 +2529,14 @@ ${JSON.stringify(details, null, 2)}`;
         return;
       }
       const freshFile = this.app.vault.getAbstractFileByPath(file.path);
-      const backup = await this.createBackup(freshFile.path);
-      const { newPath } = await this.roundImageFile(freshFile, radius, unit, shadow, border);
-      if (this.settings.dualImageSystem) {
-        await this.updateAllVaultReferences(freshFile, newPath);
-        new import_obsidian3.Notice(`Watch Mode: Created rounded version of ${file.name}`, 3e3);
-        await this.appendDebugLog("WATCH_MODE_SUCCESS", { source: file.path, output: newPath, backup });
-      } else {
-        this.refreshOpenNotes(freshFile.path);
-        new import_obsidian3.Notice(`Watch Mode: Rounded original ${file.name}`, 3e3);
-        await this.appendDebugLog("WATCH_MODE_OVERWRITE_SUCCESS", { path: file.path, backup });
+      const result = await this.processSingleImage(freshFile, radius, unit, shadow, border);
+      if (result.success && result.newPath) {
+        if (this.settings.dualImageSystem) {
+          await this.updateAllVaultReferences(freshFile, result.newPath);
+          new import_obsidian3.Notice(`Watch Mode: Created rounded version of ${file.name}`, 3e3);
+        } else {
+          new import_obsidian3.Notice(`Watch Mode: Rounded original ${file.name}`, 3e3);
+        }
       }
     } catch (error) {
       console.error("Watch Mode processing failed:", error);
