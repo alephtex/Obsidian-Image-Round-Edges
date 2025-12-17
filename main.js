@@ -61,7 +61,8 @@ var DEFAULT_SETTINGS = {
   enableBorder: false,
   borderColor: "#cccccc",
   borderWidth: 2,
-  borderStyle: "solid"
+  borderStyle: "solid",
+  debugMode: false
 };
 var RoundedFrameSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -72,6 +73,13 @@ var RoundedFrameSettingTab = class extends import_obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Image Rounded Frame" });
+    new import_obsidian.Setting(containerEl).setName("Debug Mode").setDesc("Enable verbose logging to debug issues. Logs will be written to the developer console.").addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.debugMode);
+      toggle.onChange(async (value) => {
+        this.plugin.settings.debugMode = value;
+        await this.plugin.saveSettings();
+      });
+    });
     new import_obsidian.Setting(containerEl).setName("Default unit").setDesc("Initial unit whenever you add a rounded frame.").addDropdown((dropdown) => {
       dropdown.addOption("percent", "Percent").addOption("px", "Pixels");
       dropdown.setValue(this.plugin.settings.defaultUnit);
@@ -1512,9 +1520,12 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     }
     const filename = path.basename(decodedLink);
     const allFiles = this.app.vault.getFiles();
-    const match = allFiles.find((f) => f.name === filename);
-    if (match)
-      return match;
+    const exactMatch = allFiles.find((f) => f.name === filename);
+    if (exactMatch)
+      return exactMatch;
+    const partialMatch = allFiles.find((f) => f.name.toLowerCase() === filename.toLowerCase() || f.path.endsWith(filename));
+    if (partialMatch)
+      return partialMatch;
     return null;
   }
   async ensureBackupFolder() {
@@ -1524,6 +1535,9 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
         await this.app.vault.createFolder(this.BACKUP_FOLDER);
       }
     } catch (error) {
+      if ((error == null ? void 0 : error.message) && error.message.includes("Folder already exists")) {
+        return;
+      }
       console.warn("Failed to create backup folder:", error);
     }
   }
@@ -1569,7 +1583,12 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
       const backupFile = this.app.vault.getAbstractFileByPath(backupPath);
       if (backupFile && backupFile instanceof import_obsidian3.TFile) {
         const content = await this.app.vault.readBinary(backupFile);
-        await this.app.vault.createBinary(targetPath, content);
+        const existingTarget = this.app.vault.getAbstractFileByPath(targetPath);
+        if (existingTarget instanceof import_obsidian3.TFile) {
+          await this.app.vault.modifyBinary(existingTarget, content);
+        } else if (!existingTarget) {
+          await this.app.vault.createBinary(targetPath, content);
+        }
         return true;
       }
     } catch (error) {
@@ -2066,6 +2085,8 @@ Check the console for detailed file list.`;
     await new Promise((resolve) => setTimeout(resolve, ms));
   }
   async appendDebugLog(event, details) {
+    if (!this.settings.debugMode)
+      return;
     try {
       const timestamp = new Date().toISOString();
       let entry = `[${timestamp}] ${event}`;
@@ -2073,6 +2094,7 @@ Check the console for detailed file list.`;
         entry += `
 ${JSON.stringify(details, null, 2)}`;
       }
+      console.log(`[Image Rounded Frame Debug] ${entry}`);
       entry += `
 `;
       const existing = this.app.vault.getAbstractFileByPath(this.DEBUG_LOG_PATH);
@@ -2156,12 +2178,13 @@ ${JSON.stringify(details, null, 2)}`;
         try {
           const file = this.resolveTFile(view, m.path);
           if (!file) {
-            await this.appendDebugLog("FILE_NOT_FOUND", { path: m.path, mode: "note" });
+            await this.appendDebugLog("FILE_NOT_FOUND", { path: m.path, mode: "note", resolution_attempts: ["metadataCache", "direct", "relative", "vault_search"] });
             failed++;
             done++;
             this.updateProgressPopup(done, success, failed, total);
             return;
           }
+          await this.appendDebugLog("FILE_FOUND", { path: m.path, resolved_path: file.path });
           try {
             await this.app.vault.readBinary(file);
           } catch (readErr) {
@@ -2180,6 +2203,7 @@ ${JSON.stringify(details, null, 2)}`;
             this.updateProgressPopup(done, success, failed, total);
             return;
           }
+          await this.appendDebugLog("BACKUP_CREATED", { hidden: hiddenBackup, local: localBackup });
           try {
             const { newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
             const finalFile = this.app.vault.getAbstractFileByPath(newPath);
@@ -2208,6 +2232,7 @@ ${JSON.stringify(details, null, 2)}`;
               localBackupPaths.push(localBackup);
             newPaths.push(newPath);
             success++;
+            await this.appendDebugLog("PROCESSING_SUCCESS", { source: file.path, output: newPath });
           } catch (err) {
             try {
               if (hiddenBackup) {
@@ -2246,23 +2271,38 @@ ${JSON.stringify(details, null, 2)}`;
       return b.match.start - a.match.start;
     });
     if (successMatches.length > 0) {
-      view.editor.transaction({
-        selections: [],
-        changes: successMatches.map((item) => {
-          const match = item.match;
-          const finalPath = this.getRelativePathForNote(view, item.newPath);
-          let processedPath = finalPath;
-          if (match.path.includes("%20") || match.path.includes(" ")) {
-            processedPath = finalPath.replace(/ /g, "%20");
+      const changes = successMatches.map((item) => {
+        const match = item.match;
+        const finalPath = this.getRelativePathForNote(view, item.newPath);
+        let processedPath = finalPath;
+        if (match.path.includes("%20") || match.path.includes(" ")) {
+          processedPath = finalPath.replace(/ /g, "%20");
+        }
+        const replacement = this.buildReference(match, processedPath);
+        const currentLine = view.editor.getLine(match.lineNumber);
+        if (!currentLine.includes(match.path)) {
+          const reFind = this.findMatchInLine(currentLine, match.lineNumber, { targetSrc: match.path });
+          if (reFind) {
+            return {
+              from: { line: match.lineNumber, ch: reFind.start },
+              to: { line: match.lineNumber, ch: reFind.end },
+              text: replacement
+            };
           }
-          const replacement = this.buildReference(match, processedPath);
-          return {
-            from: { line: match.lineNumber, ch: match.start },
-            to: { line: match.lineNumber, ch: match.end },
-            text: replacement
-          };
-        })
-      });
+          console.warn(`[Image Rounded Frame] Skipping update for ${match.path} - content changed on line ${match.lineNumber}`);
+          return null;
+        }
+        return {
+          from: { line: match.lineNumber, ch: match.start },
+          to: { line: match.lineNumber, ch: match.end },
+          text: replacement
+        };
+      }).filter((c) => c !== null);
+      if (changes && changes.length > 0) {
+        view.editor.transaction({
+          changes
+        });
+      }
     }
     if (newPaths.length > 0) {
       this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: (_b = (_a = view.file) == null ? void 0 : _a.path) != null ? _b : "", timestamp: Date.now() };
@@ -2308,6 +2348,7 @@ ${JSON.stringify(details, null, 2)}`;
             this.updateProgressPopup(done, success, failed, total);
             return;
           }
+          await this.appendDebugLog("BACKUP_CREATED_BULK", { path: imageFile.path, hidden: hiddenBackup, local: localBackup });
           try {
             const { newPath } = await this.roundImageFile(imageFile, radius, unit, shadow, border);
             const finalFile = this.app.vault.getAbstractFileByPath(newPath);
@@ -2335,6 +2376,7 @@ ${JSON.stringify(details, null, 2)}`;
               localBackupPaths.push(localBackup);
             newPaths.push(newPath);
             success++;
+            await this.appendDebugLog("PROCESSING_SUCCESS_BULK", { source: imageFile.path, output: newPath });
           } catch (err) {
             try {
               if (hiddenBackup) {
