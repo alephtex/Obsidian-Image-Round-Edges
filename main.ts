@@ -4,7 +4,7 @@
 // 4. Present a modal that lets the user pick radius/unit with immediate visual feedback and easy resets.
 // 5. Replace the chosen source with an <img> that uses reusable CSS classes for consistent rounded styling.
 
-import { Plugin, MarkdownView, Menu, TFile, TFolder, Notice } from 'obsidian';
+import { Plugin, MarkdownView, Menu, TFile, TFolder, Notice, EditorTransaction } from 'obsidian';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as path from 'path';
@@ -201,6 +201,43 @@ interface LastAction {
 	newPaths: string[];          // New processed image paths
 	notePath: string;            // Path to the note that was modified
 	timestamp: number;           // When the action was performed
+}
+
+// Helper class for concurrent processing
+class PromiseQueue {
+    private concurrency: number;
+    private current: number = 0;
+    private queue: (() => Promise<void>)[] = [];
+
+    constructor(concurrency: number) {
+        this.concurrency = concurrency;
+    }
+
+    add<T>(task: () => Promise<T>): Promise<T> {
+        return new Promise<T>((resolve, reject) => {
+            this.queue.push(async () => {
+                try {
+                    const result = await task();
+                    resolve(result);
+                } catch (e) {
+                    reject(e);
+                }
+            });
+            this.next();
+        });
+    }
+
+    private next() {
+        if (this.current >= this.concurrency || this.queue.length === 0) return;
+        this.current++;
+        const task = this.queue.shift();
+        if (task) {
+            task().finally(() => {
+                this.current--;
+                this.next();
+            });
+        }
+    }
 }
 
 export default class ImageRoundedFramePlugin extends Plugin {
@@ -450,8 +487,6 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		}
 	}
 
-// Right-click integrations removed; command-driven flow only
-
 	private refreshMatch(editor: any, match: ImageMatch): ImageMatch | null {
 		const line = editor.getLine(match.lineNumber);
 		return line.slice(match.start, match.end) === match.raw
@@ -540,8 +575,6 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		const currentFile = view.file;
 		const currentFolder = currentFile.parent;
 		if (!currentFolder) return [];
-
-		const folderPath = currentFolder.path;
 
 		// Get all referenced images from markdown files in current folder
 		const referencedImages = await this.getReferencedImagesInFolder(currentFolder);
@@ -636,10 +669,12 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		const imageRefs: string[] = [];
 
 		// Markdown image syntax: ![alt](path)
-		const mdRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
+		// Updated to support <path with spaces> as well
+		const mdRegex = /!\[([^\]]*)\]\((?:<([^>]+)>|([^)\s]+))(?:\s+"([^"]*)")?\)/g;
 		let mdMatch;
 		while ((mdMatch = mdRegex.exec(content)) !== null) {
-			imageRefs.push(mdMatch[2].trim());
+			const pathGroup = mdMatch[2] || mdMatch[3];
+			if (pathGroup) imageRefs.push(pathGroup.trim());
 		}
 
 		// Wikilink image syntax: ![[path|alt]]
@@ -660,7 +695,11 @@ export default class ImageRoundedFramePlugin extends Plugin {
 	}
 
 	private resolveImageFile(imagePath: string, sourceFile: TFile): TFile | null {
-		// URL-decode the path first
+        // Use the native resolver first for consistency
+        const dest = this.app.metadataCache.getFirstLinkpathDest(imagePath, sourceFile.path);
+        if (dest) return dest;
+
+		// URL-decode the path
 		let decodedPath: string;
 		try {
 			decodedPath = decodeURIComponent(imagePath);
@@ -668,8 +707,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			decodedPath = imagePath;
 		}
 
-		// Try different resolution strategies
-
+        // Try manual resolution for relative paths if metadataCache fails (e.g. for non-standard links)
 		// 1. First try as direct vault path (most common in Obsidian)
 		try {
 			const file = this.app.vault.getAbstractFileByPath(decodedPath) as TFile;
@@ -700,26 +738,6 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			try {
 				const file = this.app.vault.getAbstractFileByPath(resolvedPath) as TFile;
 				return file || null;
-			} catch (error) {}
-		}
-
-		// 3. Handle paths without explicit relative markers but with slashes
-		if (decodedPath.includes('/') && !decodedPath.startsWith('/')) {
-			// This might be a path relative to vault root
-			try {
-				const file = this.app.vault.getAbstractFileByPath(decodedPath) as TFile;
-				if (file) return file;
-			} catch (error) {}
-		}
-
-		// 4. Try relative to source file directory for simple filenames
-		if (!decodedPath.includes('/')) {
-			const sourceDir = sourceFile.parent?.path || '';
-			const resolvedPath = sourceDir ? `${sourceDir}/${decodedPath}` : decodedPath;
-
-			try {
-				const file = this.app.vault.getAbstractFileByPath(resolvedPath) as TFile;
-				if (file) return file;
 			} catch (error) {}
 		}
 
@@ -917,10 +935,12 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 	private collectMatches(line: string, lineNumber: number): ImageMatch[] {
 		const matches: ImageMatch[] = [];
-		const mdRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
+		// Markdown image syntax: ![alt](path) - updated for <> support
+		const mdRegex = /!\[([^\]]*)\]\((?:<([^>]+)>|([^)\s]+))(?:\s+"([^"]*)")?\)/g;
 		let md: RegExpExecArray | null;
 		while ((md = mdRegex.exec(line)) !== null) {
-			const rawPath = (md[2] || '').trim();
+			const pathGroup = md[2] || md[3];
+			const rawPath = (pathGroup || '').trim();
 			const safePath = this.sanitizeImagePath(rawPath);
 			if (!safePath) continue;
 			matches.push({
@@ -1646,7 +1666,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		ctx.lineTo(x + w, y + h - rr);
 		ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
 		ctx.lineTo(x + rr, y + h);
-		ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+		ctx.quadraticCurveTo(x, y, x + h, y + h - rr);
 		ctx.lineTo(x, y + rr);
 		ctx.quadraticCurveTo(x, y, x + rr, y);
 	}
@@ -1817,60 +1837,105 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		const backupPaths: string[] = [];
 		const localBackupPaths: string[] = [];
 		const newPaths: string[] = [];
+        const successMatches: { match: ImageMatch, newPath: string }[] = [];
 
 		this.startProgressPopup(total);
 
+        // Use PromiseQueue for concurrency (limit to 3 concurrent items to prevent freezing)
+        const queue = new PromiseQueue(3);
+        const tasks: Promise<void>[] = [];
+
 		for (const m of refreshed) {
-			this.updateProgressPopup(done, success, failed, total, m.path);
-			await this.sleep(500);
+            tasks.push(queue.add(async () => {
+                this.updateProgressPopup(done, success, failed, total, m.path);
+                
+                try {
+                    const file = this.resolveTFile(view, m.path);
+                    if (!file) { 
+                        await this.appendDebugLog('FILE_NOT_FOUND', { path: m.path, mode: 'note' }); 
+                        failed++; done++; this.updateProgressPopup(done, success, failed, total); 
+                        return; 
+                    }
 
-			try {
-				const file = this.resolveTFile(view, m.path);
-				if (!file) { await this.appendDebugLog('FILE_NOT_FOUND', { path: m.path, mode: 'note' }); failed++; done++; this.updateProgressPopup(done, success, failed, total); continue; }
+                    // Ensure readable
+                    try { await this.app.vault.readBinary(file); } catch (readErr: any) { await this.appendDebugLog('READ_FAILED', { path: m.path, error: String(readErr) }); failed++; done++; this.updateProgressPopup(done, success, failed, total); return; }
 
-				// Ensure readable
-				try { await this.app.vault.readBinary(file); } catch (readErr: any) { await this.appendDebugLog('READ_FAILED', { path: m.path, error: String(readErr) }); failed++; done++; this.updateProgressPopup(done, success, failed, total); continue; }
+                    // Backups - require at least ONE to succeed
+                    const hiddenBackup = await this.createBackup(file.path);
+                    const localBackup = await this.createLocalBackup(file.path);
+                    if (!hiddenBackup && !localBackup) { await this.appendDebugLog('BACKUP_FAILED', { path: file.path }); failed++; done++; this.updateProgressPopup(done, success, failed, total); return; }
 
-				// Backups - require at least ONE to succeed
-				const hiddenBackup = await this.createBackup(file.path);
-				const localBackup = await this.createLocalBackup(file.path);
-				if (!hiddenBackup && !localBackup) { await this.appendDebugLog('BACKUP_FAILED', { path: file.path }); failed++; done++; this.updateProgressPopup(done, success, failed, total); continue; }
+                    try {
+                        const { newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
+                        const finalFile = this.app.vault.getAbstractFileByPath(newPath);
+                        if (!finalFile || !(finalFile instanceof TFile) || finalFile.stat.size === 0) {
+                            // cleanup backups since nothing changed
+                            if (hiddenBackup) { const f = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (f) await this.app.vault.delete(f); }
+                            if (localBackup) { const f2 = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (f2) await this.app.vault.delete(f2); }
+                            await this.appendDebugLog('PROCESSING_OUTPUT_INVALID', { source: file.path, output: newPath });
+                            failed++; done++; this.updateProgressPopup(done, success, failed, total); return;
+                        }
 
-				try {
-					const { newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
-					const finalFile = this.app.vault.getAbstractFileByPath(newPath);
-					if (!finalFile || !(finalFile instanceof TFile) || finalFile.stat.size === 0) {
-						// cleanup backups since nothing changed
-						if (hiddenBackup) { const f = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (f) await this.app.vault.delete(f); }
-						if (localBackup) { const f2 = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (f2) await this.app.vault.delete(f2); }
-						await this.appendDebugLog('PROCESSING_OUTPUT_INVALID', { source: file.path, output: newPath });
-						failed++; done++; this.updateProgressPopup(done, success, failed, total); continue;
-					}
+                        // Store success for later batch update
+                        successMatches.push({ match: m, newPath });
 
-					// Update reference immediately (safe due to descending order)
-					this.updateReference(view.editor, view, m, newPath);
+                        originalPaths.push(file.path);
+                        if (hiddenBackup) backupPaths.push(hiddenBackup);
+                        if (localBackup) localBackupPaths.push(localBackup);
+                        newPaths.push(newPath);
+                        success++;
+                    } catch (err: any) {
+                        // On failure, try to remove backups to avoid clutter if nothing changed
+                        try { if (hiddenBackup) { const bf = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (bf) await this.app.vault.delete(bf); } } catch {}
+                        try { if (localBackup) { const lbf = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (lbf) await this.app.vault.delete(lbf); } } catch {}
+                        await this.appendDebugLog('PROCESSING_EXCEPTION', { path: file.path, error: String(err?.stack || err) });
+                        failed++;
+                    }
 
-					originalPaths.push(file.path);
-					if (hiddenBackup) backupPaths.push(hiddenBackup);
-					if (localBackup) localBackupPaths.push(localBackup);
-					newPaths.push(newPath);
-					success++;
-				} catch (err: any) {
-					// On failure, try to remove backups to avoid clutter if nothing changed
-					try { if (hiddenBackup) { const bf = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (bf) await this.app.vault.delete(bf); } } catch {}
-					try { if (localBackup) { const lbf = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (lbf) await this.app.vault.delete(lbf); } } catch {}
-					await this.appendDebugLog('PROCESSING_EXCEPTION', { path: file.path, error: String(err?.stack || err) });
-					failed++;
-				}
-
-				done++;
-				this.updateProgressPopup(done, success, failed, total);
-			} catch (outer: any) {
-				await this.appendDebugLog('UNEXPECTED_FAILURE_NOTE', { path: m.path, error: String(outer) });
-				failed++; done++;
-				this.updateProgressPopup(done, success, failed, total);
-			}
+                    done++;
+                    this.updateProgressPopup(done, success, failed, total);
+                } catch (outer: any) {
+                    await this.appendDebugLog('UNEXPECTED_FAILURE_NOTE', { path: m.path, error: String(outer) });
+                    failed++; done++;
+                    this.updateProgressPopup(done, success, failed, total);
+                }
+            }));
 		}
+
+        // Wait for all tasks
+        await Promise.all(tasks);
+
+        // Apply editor updates in batch
+        // We need to re-verify line numbers or just trust descending order if document hasn't changed.
+        // Since we blocked (await Promise.all), if user didn't edit, it's fine.
+        // We should sort successMatches descending to be safe for `replaceRange`
+        successMatches.sort((a, b) => {
+            if (a.match.lineNumber !== b.match.lineNumber) {
+                return b.match.lineNumber - a.match.lineNumber;
+            }
+            return b.match.start - a.match.start;
+        });
+
+        // Apply changes
+        if (successMatches.length > 0) {
+            view.editor.transaction({
+                selections: [],
+                changes: successMatches.map(item => {
+                    const match = item.match;
+                    const finalPath = this.getRelativePathForNote(view, item.newPath);
+                    let processedPath = finalPath;
+                    if (match.path.includes('%20') || match.path.includes(' ')) {
+                        processedPath = finalPath.replace(/ /g, '%20');
+                    }
+                    const replacement = this.buildReference(match, processedPath);
+                    return {
+                        from: { line: match.lineNumber, ch: match.start },
+                        to: { line: match.lineNumber, ch: match.end },
+                        text: replacement
+                    };
+                })
+            });
+        }
 
 		if (newPaths.length > 0) {
 			this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: view.file?.path ?? '', timestamp: Date.now() };
@@ -1893,45 +1958,51 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 		this.startProgressPopup(total);
 
+        const queue = new PromiseQueue(3);
+        const tasks: Promise<void>[] = [];
+
 		for (const imageFile of imageFiles) {
-			this.updateProgressPopup(done, success, failed, total, imageFile.path);
-			await this.sleep(500);
+            tasks.push(queue.add(async () => {
+                this.updateProgressPopup(done, success, failed, total, imageFile.path);
+                
+                try {
+                    try { await this.app.vault.readBinary(imageFile); } catch (readErr: any) { await this.appendDebugLog('READ_FAILED', { path: imageFile.path, error: String(readErr) }); failed++; done++; this.updateProgressPopup(done, success, failed, total); return; }
+                    const hiddenBackup = await this.createBackup(imageFile.path);
+                    const localBackup = await this.createLocalBackup(imageFile.path);
+                    if (!hiddenBackup && !localBackup) { await this.appendDebugLog('BACKUP_FAILED', { path: imageFile.path }); failed++; done++; this.updateProgressPopup(done, success, failed, total); return; }
 
-			try {
-				try { await this.app.vault.readBinary(imageFile); } catch (readErr: any) { await this.appendDebugLog('READ_FAILED', { path: imageFile.path, error: String(readErr) }); failed++; done++; this.updateProgressPopup(done, success, failed, total); continue; }
-				const hiddenBackup = await this.createBackup(imageFile.path);
-				const localBackup = await this.createLocalBackup(imageFile.path);
-				if (!hiddenBackup && !localBackup) { await this.appendDebugLog('BACKUP_FAILED', { path: imageFile.path }); failed++; done++; this.updateProgressPopup(done, success, failed, total); continue; }
+                    try {
+                        const { newPath } = await this.roundImageFile(imageFile, radius, unit, shadow, border);
+                        const finalFile = this.app.vault.getAbstractFileByPath(newPath);
+                        if (!finalFile || !(finalFile instanceof TFile) || finalFile.stat.size === 0) {
+                            if (hiddenBackup) { const f = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (f) await this.app.vault.delete(f); }
+                            if (localBackup) { const f2 = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (f2) await this.app.vault.delete(f2); }
+                            await this.appendDebugLog('PROCESSING_OUTPUT_INVALID', { source: imageFile.path, output: newPath });
+                            failed++; done++; this.updateProgressPopup(done, success, failed, total); return;
+                        }
+                        originalPaths.push(imageFile.path);
+                        if (hiddenBackup) backupPaths.push(hiddenBackup);
+                        if (localBackup) localBackupPaths.push(localBackup);
+                        newPaths.push(newPath);
+                        success++;
+                    } catch (err: any) {
+                        try { if (hiddenBackup) { const bf = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (bf) await this.app.vault.delete(bf); } } catch {}
+                        try { if (localBackup) { const lbf = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (lbf) await this.app.vault.delete(lbf); } } catch {}
+                        await this.appendDebugLog('PROCESSING_EXCEPTION', { path: imageFile.path, error: String(err?.stack || err) });
+                        failed++;
+                    }
 
-				try {
-					const { newPath } = await this.roundImageFile(imageFile, radius, unit, shadow, border);
-					const finalFile = this.app.vault.getAbstractFileByPath(newPath);
-					if (!finalFile || !(finalFile instanceof TFile) || finalFile.stat.size === 0) {
-						if (hiddenBackup) { const f = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (f) await this.app.vault.delete(f); }
-						if (localBackup) { const f2 = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (f2) await this.app.vault.delete(f2); }
-						await this.appendDebugLog('PROCESSING_OUTPUT_INVALID', { source: imageFile.path, output: newPath });
-						failed++; done++; this.updateProgressPopup(done, success, failed, total); continue;
-					}
-					originalPaths.push(imageFile.path);
-					if (hiddenBackup) backupPaths.push(hiddenBackup);
-					if (localBackup) localBackupPaths.push(localBackup);
-					newPaths.push(newPath);
-					success++;
-				} catch (err: any) {
-					try { if (hiddenBackup) { const bf = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (bf) await this.app.vault.delete(bf); } } catch {}
-					try { if (localBackup) { const lbf = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (lbf) await this.app.vault.delete(lbf); } } catch {}
-					await this.appendDebugLog('PROCESSING_EXCEPTION', { path: imageFile.path, error: String(err?.stack || err) });
-					failed++;
-				}
-
-				done++;
-				this.updateProgressPopup(done, success, failed, total);
-			} catch (outer: any) {
-				await this.appendDebugLog('UNEXPECTED_FAILURE_BULK', { path: imageFile.path, error: String(outer) });
-				failed++; done++;
-				this.updateProgressPopup(done, success, failed, total);
-			}
+                    done++;
+                    this.updateProgressPopup(done, success, failed, total);
+                } catch (outer: any) {
+                    await this.appendDebugLog('UNEXPECTED_FAILURE_BULK', { path: imageFile.path, error: String(outer) });
+                    failed++; done++;
+                    this.updateProgressPopup(done, success, failed, total);
+                }
+            }));
 		}
+        
+        await Promise.all(tasks);
 
 		if (newPaths.length > 0) {
 			this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: view?.file?.path ?? '', timestamp: Date.now() };

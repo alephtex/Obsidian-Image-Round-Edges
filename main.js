@@ -745,6 +745,38 @@ if __name__ == '__main__':
         sys.exit(1)
 `;
 var execAsync = (0, import_util.promisify)(import_child_process.exec);
+var PromiseQueue = class {
+  constructor(concurrency) {
+    this.current = 0;
+    this.queue = [];
+    this.concurrency = concurrency;
+  }
+  add(task) {
+    return new Promise((resolve, reject) => {
+      this.queue.push(async () => {
+        try {
+          const result = await task();
+          resolve(result);
+        } catch (e) {
+          reject(e);
+        }
+      });
+      this.next();
+    });
+  }
+  next() {
+    if (this.current >= this.concurrency || this.queue.length === 0)
+      return;
+    this.current++;
+    const task = this.queue.shift();
+    if (task) {
+      task().finally(() => {
+        this.current--;
+        this.next();
+      });
+    }
+  }
+};
 var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
   constructor() {
     super(...arguments);
@@ -968,7 +1000,6 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
       }
     }
   }
-  // Right-click integrations removed; command-driven flow only
   refreshMatch(editor, match) {
     var _a;
     const line = editor.getLine(match.lineNumber);
@@ -1057,7 +1088,6 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     const currentFolder = currentFile.parent;
     if (!currentFolder)
       return [];
-    const folderPath = currentFolder.path;
     const referencedImages = await this.getReferencedImagesInFolder(currentFolder);
     const physicalImages = this.getPhysicalImagesInFolder(currentFolder);
     const allImages = /* @__PURE__ */ new Map();
@@ -1123,10 +1153,12 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
   }
   extractImageReferences(content) {
     const imageRefs = [];
-    const mdRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
+    const mdRegex = /!\[([^\]]*)\]\((?:<([^>]+)>|([^)\s]+))(?:\s+"([^"]*)")?\)/g;
     let mdMatch;
     while ((mdMatch = mdRegex.exec(content)) !== null) {
-      imageRefs.push(mdMatch[2].trim());
+      const pathGroup = mdMatch[2] || mdMatch[3];
+      if (pathGroup)
+        imageRefs.push(pathGroup.trim());
     }
     const wikiRegex = /!\[\[([^|\]]+)(?:\|([^\]]+))?\]\]/g;
     let wikiMatch;
@@ -1141,7 +1173,10 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     return imageRefs;
   }
   resolveImageFile(imagePath, sourceFile) {
-    var _a, _b;
+    var _a;
+    const dest = this.app.metadataCache.getFirstLinkpathDest(imagePath, sourceFile.path);
+    if (dest)
+      return dest;
     let decodedPath;
     try {
       decodedPath = decodeURIComponent(imagePath);
@@ -1172,24 +1207,6 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
       try {
         const file = this.app.vault.getAbstractFileByPath(resolvedPath);
         return file || null;
-      } catch (error) {
-      }
-    }
-    if (decodedPath.includes("/") && !decodedPath.startsWith("/")) {
-      try {
-        const file = this.app.vault.getAbstractFileByPath(decodedPath);
-        if (file)
-          return file;
-      } catch (error) {
-      }
-    }
-    if (!decodedPath.includes("/")) {
-      const sourceDir = ((_b = sourceFile.parent) == null ? void 0 : _b.path) || "";
-      const resolvedPath = sourceDir ? `${sourceDir}/${decodedPath}` : decodedPath;
-      try {
-        const file = this.app.vault.getAbstractFileByPath(resolvedPath);
-        if (file)
-          return file;
       } catch (error) {
       }
     }
@@ -1350,10 +1367,11 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
   collectMatches(line, lineNumber) {
     var _a;
     const matches = [];
-    const mdRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
+    const mdRegex = /!\[([^\]]*)\]\((?:<([^>]+)>|([^)\s]+))(?:\s+"([^"]*)")?\)/g;
     let md;
     while ((md = mdRegex.exec(line)) !== null) {
-      const rawPath = (md[2] || "").trim();
+      const pathGroup = md[2] || md[3];
+      const rawPath = (pathGroup || "").trim();
       const safePath = this.sanitizeImagePath(rawPath);
       if (!safePath)
         continue;
@@ -1956,7 +1974,7 @@ Check the console for detailed file list.`;
     ctx.lineTo(x + w, y + h - rr);
     ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
     ctx.lineTo(x + rr, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+    ctx.quadraticCurveTo(x, y, x + h, y + h - rr);
     ctx.lineTo(x, y + rr);
     ctx.quadraticCurveTo(x, y, x + rr, y);
   }
@@ -2117,93 +2135,123 @@ ${JSON.stringify(details, null, 2)}`;
     const backupPaths = [];
     const localBackupPaths = [];
     const newPaths = [];
+    const successMatches = [];
     this.startProgressPopup(total);
+    const queue = new PromiseQueue(3);
+    const tasks = [];
     for (const m of refreshed) {
-      this.updateProgressPopup(done, success, failed, total, m.path);
-      await this.sleep(500);
-      try {
-        const file = this.resolveTFile(view, m.path);
-        if (!file) {
-          await this.appendDebugLog("FILE_NOT_FOUND", { path: m.path, mode: "note" });
-          failed++;
-          done++;
-          this.updateProgressPopup(done, success, failed, total);
-          continue;
-        }
+      tasks.push(queue.add(async () => {
+        this.updateProgressPopup(done, success, failed, total, m.path);
         try {
-          await this.app.vault.readBinary(file);
-        } catch (readErr) {
-          await this.appendDebugLog("READ_FAILED", { path: m.path, error: String(readErr) });
-          failed++;
-          done++;
-          this.updateProgressPopup(done, success, failed, total);
-          continue;
-        }
-        const hiddenBackup = await this.createBackup(file.path);
-        const localBackup = await this.createLocalBackup(file.path);
-        if (!hiddenBackup && !localBackup) {
-          await this.appendDebugLog("BACKUP_FAILED", { path: file.path });
-          failed++;
-          done++;
-          this.updateProgressPopup(done, success, failed, total);
-          continue;
-        }
-        try {
-          const { newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
-          const finalFile = this.app.vault.getAbstractFileByPath(newPath);
-          if (!finalFile || !(finalFile instanceof import_obsidian3.TFile) || finalFile.stat.size === 0) {
-            if (hiddenBackup) {
-              const f = this.app.vault.getAbstractFileByPath(hiddenBackup);
-              if (f)
-                await this.app.vault.delete(f);
-            }
-            if (localBackup) {
-              const f2 = this.app.vault.getAbstractFileByPath(localBackup);
-              if (f2)
-                await this.app.vault.delete(f2);
-            }
-            await this.appendDebugLog("PROCESSING_OUTPUT_INVALID", { source: file.path, output: newPath });
+          const file = this.resolveTFile(view, m.path);
+          if (!file) {
+            await this.appendDebugLog("FILE_NOT_FOUND", { path: m.path, mode: "note" });
             failed++;
             done++;
             this.updateProgressPopup(done, success, failed, total);
-            continue;
-          }
-          this.updateReference(view.editor, view, m, newPath);
-          originalPaths.push(file.path);
-          if (hiddenBackup)
-            backupPaths.push(hiddenBackup);
-          if (localBackup)
-            localBackupPaths.push(localBackup);
-          newPaths.push(newPath);
-          success++;
-        } catch (err) {
-          try {
-            if (hiddenBackup) {
-              const bf = this.app.vault.getAbstractFileByPath(hiddenBackup);
-              if (bf)
-                await this.app.vault.delete(bf);
-            }
-          } catch (e) {
+            return;
           }
           try {
-            if (localBackup) {
-              const lbf = this.app.vault.getAbstractFileByPath(localBackup);
-              if (lbf)
-                await this.app.vault.delete(lbf);
-            }
-          } catch (e) {
+            await this.app.vault.readBinary(file);
+          } catch (readErr) {
+            await this.appendDebugLog("READ_FAILED", { path: m.path, error: String(readErr) });
+            failed++;
+            done++;
+            this.updateProgressPopup(done, success, failed, total);
+            return;
           }
-          await this.appendDebugLog("PROCESSING_EXCEPTION", { path: file.path, error: String((err == null ? void 0 : err.stack) || err) });
+          const hiddenBackup = await this.createBackup(file.path);
+          const localBackup = await this.createLocalBackup(file.path);
+          if (!hiddenBackup && !localBackup) {
+            await this.appendDebugLog("BACKUP_FAILED", { path: file.path });
+            failed++;
+            done++;
+            this.updateProgressPopup(done, success, failed, total);
+            return;
+          }
+          try {
+            const { newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
+            const finalFile = this.app.vault.getAbstractFileByPath(newPath);
+            if (!finalFile || !(finalFile instanceof import_obsidian3.TFile) || finalFile.stat.size === 0) {
+              if (hiddenBackup) {
+                const f = this.app.vault.getAbstractFileByPath(hiddenBackup);
+                if (f)
+                  await this.app.vault.delete(f);
+              }
+              if (localBackup) {
+                const f2 = this.app.vault.getAbstractFileByPath(localBackup);
+                if (f2)
+                  await this.app.vault.delete(f2);
+              }
+              await this.appendDebugLog("PROCESSING_OUTPUT_INVALID", { source: file.path, output: newPath });
+              failed++;
+              done++;
+              this.updateProgressPopup(done, success, failed, total);
+              return;
+            }
+            successMatches.push({ match: m, newPath });
+            originalPaths.push(file.path);
+            if (hiddenBackup)
+              backupPaths.push(hiddenBackup);
+            if (localBackup)
+              localBackupPaths.push(localBackup);
+            newPaths.push(newPath);
+            success++;
+          } catch (err) {
+            try {
+              if (hiddenBackup) {
+                const bf = this.app.vault.getAbstractFileByPath(hiddenBackup);
+                if (bf)
+                  await this.app.vault.delete(bf);
+              }
+            } catch (e) {
+            }
+            try {
+              if (localBackup) {
+                const lbf = this.app.vault.getAbstractFileByPath(localBackup);
+                if (lbf)
+                  await this.app.vault.delete(lbf);
+              }
+            } catch (e) {
+            }
+            await this.appendDebugLog("PROCESSING_EXCEPTION", { path: file.path, error: String((err == null ? void 0 : err.stack) || err) });
+            failed++;
+          }
+          done++;
+          this.updateProgressPopup(done, success, failed, total);
+        } catch (outer) {
+          await this.appendDebugLog("UNEXPECTED_FAILURE_NOTE", { path: m.path, error: String(outer) });
           failed++;
+          done++;
+          this.updateProgressPopup(done, success, failed, total);
         }
-        done++;
-        this.updateProgressPopup(done, success, failed, total);
-      } catch (outer) {
-        await this.appendDebugLog("UNEXPECTED_FAILURE_NOTE", { path: m.path, error: String(outer) });
-        failed++;
-        done++;
-        this.updateProgressPopup(done, success, failed, total);
+      }));
+    }
+    await Promise.all(tasks);
+    successMatches.sort((a, b) => {
+      if (a.match.lineNumber !== b.match.lineNumber) {
+        return b.match.lineNumber - a.match.lineNumber;
       }
+      return b.match.start - a.match.start;
+    });
+    if (successMatches.length > 0) {
+      view.editor.transaction({
+        selections: [],
+        changes: successMatches.map((item) => {
+          const match = item.match;
+          const finalPath = this.getRelativePathForNote(view, item.newPath);
+          let processedPath = finalPath;
+          if (match.path.includes("%20") || match.path.includes(" ")) {
+            processedPath = finalPath.replace(/ /g, "%20");
+          }
+          const replacement = this.buildReference(match, processedPath);
+          return {
+            from: { line: match.lineNumber, ch: match.start },
+            to: { line: match.lineNumber, ch: match.end },
+            text: replacement
+          };
+        })
+      });
     }
     if (newPaths.length > 0) {
       this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: (_b = (_a = view.file) == null ? void 0 : _a.path) != null ? _b : "", timestamp: Date.now() };
@@ -2225,84 +2273,88 @@ ${JSON.stringify(details, null, 2)}`;
     const localBackupPaths = [];
     const newPaths = [];
     this.startProgressPopup(total);
+    const queue = new PromiseQueue(3);
+    const tasks = [];
     for (const imageFile of imageFiles) {
-      this.updateProgressPopup(done, success, failed, total, imageFile.path);
-      await this.sleep(500);
-      try {
+      tasks.push(queue.add(async () => {
+        this.updateProgressPopup(done, success, failed, total, imageFile.path);
         try {
-          await this.app.vault.readBinary(imageFile);
-        } catch (readErr) {
-          await this.appendDebugLog("READ_FAILED", { path: imageFile.path, error: String(readErr) });
-          failed++;
-          done++;
-          this.updateProgressPopup(done, success, failed, total);
-          continue;
-        }
-        const hiddenBackup = await this.createBackup(imageFile.path);
-        const localBackup = await this.createLocalBackup(imageFile.path);
-        if (!hiddenBackup && !localBackup) {
-          await this.appendDebugLog("BACKUP_FAILED", { path: imageFile.path });
-          failed++;
-          done++;
-          this.updateProgressPopup(done, success, failed, total);
-          continue;
-        }
-        try {
-          const { newPath } = await this.roundImageFile(imageFile, radius, unit, shadow, border);
-          const finalFile = this.app.vault.getAbstractFileByPath(newPath);
-          if (!finalFile || !(finalFile instanceof import_obsidian3.TFile) || finalFile.stat.size === 0) {
-            if (hiddenBackup) {
-              const f = this.app.vault.getAbstractFileByPath(hiddenBackup);
-              if (f)
-                await this.app.vault.delete(f);
-            }
-            if (localBackup) {
-              const f2 = this.app.vault.getAbstractFileByPath(localBackup);
-              if (f2)
-                await this.app.vault.delete(f2);
-            }
-            await this.appendDebugLog("PROCESSING_OUTPUT_INVALID", { source: imageFile.path, output: newPath });
+          try {
+            await this.app.vault.readBinary(imageFile);
+          } catch (readErr) {
+            await this.appendDebugLog("READ_FAILED", { path: imageFile.path, error: String(readErr) });
             failed++;
             done++;
             this.updateProgressPopup(done, success, failed, total);
-            continue;
+            return;
           }
-          originalPaths.push(imageFile.path);
-          if (hiddenBackup)
-            backupPaths.push(hiddenBackup);
-          if (localBackup)
-            localBackupPaths.push(localBackup);
-          newPaths.push(newPath);
-          success++;
-        } catch (err) {
-          try {
-            if (hiddenBackup) {
-              const bf = this.app.vault.getAbstractFileByPath(hiddenBackup);
-              if (bf)
-                await this.app.vault.delete(bf);
-            }
-          } catch (e) {
+          const hiddenBackup = await this.createBackup(imageFile.path);
+          const localBackup = await this.createLocalBackup(imageFile.path);
+          if (!hiddenBackup && !localBackup) {
+            await this.appendDebugLog("BACKUP_FAILED", { path: imageFile.path });
+            failed++;
+            done++;
+            this.updateProgressPopup(done, success, failed, total);
+            return;
           }
           try {
-            if (localBackup) {
-              const lbf = this.app.vault.getAbstractFileByPath(localBackup);
-              if (lbf)
-                await this.app.vault.delete(lbf);
+            const { newPath } = await this.roundImageFile(imageFile, radius, unit, shadow, border);
+            const finalFile = this.app.vault.getAbstractFileByPath(newPath);
+            if (!finalFile || !(finalFile instanceof import_obsidian3.TFile) || finalFile.stat.size === 0) {
+              if (hiddenBackup) {
+                const f = this.app.vault.getAbstractFileByPath(hiddenBackup);
+                if (f)
+                  await this.app.vault.delete(f);
+              }
+              if (localBackup) {
+                const f2 = this.app.vault.getAbstractFileByPath(localBackup);
+                if (f2)
+                  await this.app.vault.delete(f2);
+              }
+              await this.appendDebugLog("PROCESSING_OUTPUT_INVALID", { source: imageFile.path, output: newPath });
+              failed++;
+              done++;
+              this.updateProgressPopup(done, success, failed, total);
+              return;
             }
-          } catch (e) {
+            originalPaths.push(imageFile.path);
+            if (hiddenBackup)
+              backupPaths.push(hiddenBackup);
+            if (localBackup)
+              localBackupPaths.push(localBackup);
+            newPaths.push(newPath);
+            success++;
+          } catch (err) {
+            try {
+              if (hiddenBackup) {
+                const bf = this.app.vault.getAbstractFileByPath(hiddenBackup);
+                if (bf)
+                  await this.app.vault.delete(bf);
+              }
+            } catch (e) {
+            }
+            try {
+              if (localBackup) {
+                const lbf = this.app.vault.getAbstractFileByPath(localBackup);
+                if (lbf)
+                  await this.app.vault.delete(lbf);
+              }
+            } catch (e) {
+            }
+            await this.appendDebugLog("PROCESSING_EXCEPTION", { path: imageFile.path, error: String((err == null ? void 0 : err.stack) || err) });
+            failed++;
           }
-          await this.appendDebugLog("PROCESSING_EXCEPTION", { path: imageFile.path, error: String((err == null ? void 0 : err.stack) || err) });
+          done++;
+          this.updateProgressPopup(done, success, failed, total);
+        } catch (outer) {
+          await this.appendDebugLog("UNEXPECTED_FAILURE_BULK", { path: imageFile.path, error: String(outer) });
           failed++;
+          done++;
+          this.updateProgressPopup(done, success, failed, total);
         }
-        done++;
-        this.updateProgressPopup(done, success, failed, total);
-      } catch (outer) {
-        await this.appendDebugLog("UNEXPECTED_FAILURE_BULK", { path: imageFile.path, error: String(outer) });
-        failed++;
-        done++;
-        this.updateProgressPopup(done, success, failed, total);
-      }
+      }));
     }
+    await Promise.all(tasks);
     if (newPaths.length > 0) {
       this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: (_b = (_a = view == null ? void 0 : view.file) == null ? void 0 : _a.path) != null ? _b : "", timestamp: Date.now() };
       this.showActionConfirmationPopup();
