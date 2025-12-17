@@ -1964,15 +1964,35 @@ export default class ImageRoundedFramePlugin extends Plugin {
 					processedPath = finalPath.replace(/ /g, '%20');
 				}
 				const replacement = this.buildReference(match, processedPath);
+				
+				// Verify if the line content has changed since we first scanned it
+				// This prevents overwriting if the user edited the line while processing was happening
+				const currentLine = view.editor.getLine(match.lineNumber);
+				if (!currentLine.includes(match.path)) {
+					// The path we are looking for is no longer on this line
+					// We need to re-find it on this line or skip
+					const reFind = this.findMatchInLine(currentLine, match.lineNumber, { targetSrc: match.path });
+					if (reFind) {
+						return {
+							from: { line: match.lineNumber, ch: reFind.start },
+							to: { line: match.lineNumber, ch: reFind.end },
+							text: replacement
+						};
+					}
+					// If we can't find it, we skip this update to be safe
+					console.warn(`[Image Rounded Frame] Skipping update for ${match.path} - content changed on line ${match.lineNumber}`);
+					return null;
+				}
+
 				return {
 					from: { line: match.lineNumber, ch: match.start },
 					to: { line: match.lineNumber, ch: match.end },
 					text: replacement
 				};
-			});
+			}).filter(c => c !== null) as EditorTransaction['changes'];
 
 			// Only execute transaction if there are valid changes
-			if (changes.length > 0) {
+			if (changes && changes.length > 0) {
 				// We do NOT need to provide 'selections' if we don't want to move the cursor.
 				// However, if the API requires at least one range when 'selections' is present,
 				// we can just omit 'selections' entirely to keep the user's cursor where it is
