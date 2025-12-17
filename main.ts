@@ -879,13 +879,13 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		return;
 	}
 
-	private getRelativePathForNote(view: MarkdownView, absolutePath: string): string {
-		const originalPath = absolutePath;
-		const currentFile = view.file;
+	private getRelativePathForNote(viewOrFile: MarkdownView | TFile, absolutePath: string, originalPath?: string): string {
+		const styleBase = originalPath ?? absolutePath;
+		const currentFile = viewOrFile instanceof TFile ? viewOrFile : viewOrFile.file;
 		let finalPath = absolutePath;
 
 		// If original path was relative, make new path relative too
-		if (originalPath.startsWith('./') && currentFile) {
+		if (styleBase.startsWith('./') && currentFile) {
 			const newFile = this.app.vault.getAbstractFileByPath(absolutePath) as TFile | null;
 			if (newFile) {
 				const currentDir = currentFile.parent?.path || '';
@@ -920,7 +920,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 					}
 				}
 			}
-		} else if (!originalPath.startsWith('/') && !/^[A-Za-z]:/.test(originalPath) && !originalPath.startsWith('./') && currentFile) {
+		} else if (!styleBase.startsWith('/') && !/^[A-Za-z]:/.test(styleBase) && !styleBase.startsWith('./') && currentFile) {
 			// Original was relative without ./ prefix - try to preserve format
 			const newFile = this.app.vault.getAbstractFileByPath(absolutePath) as TFile | null;
 			if (newFile) {
@@ -1733,7 +1733,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 	}
 
 	private updateReference(editor: any, view: MarkdownView, match: ImageMatch, newPath: string): void {
-		const finalPath = this.getRelativePathForNote(view, newPath);
+		const finalPath = this.getRelativePathForNote(view, newPath, match.path);
 
 		// URL-encode path if it contains spaces (like original might have been)
 		const originalPath = match.path;
@@ -1952,6 +1952,21 @@ export default class ImageRoundedFramePlugin extends Plugin {
         // Wait for all tasks
         await Promise.all(tasks);
 
+		// Update all vault references for successful transformations
+		// Deduplicate by file path to avoid redundant vault scans
+		const uniqueSuccessFiles = new Map<string, { file: TFile; newPath: string }>();
+		for (const item of successMatches) {
+			const file = this.resolveTFile(view, item.match.path);
+			if (file) {
+				uniqueSuccessFiles.set(file.path, { file, newPath: item.newPath });
+			}
+		}
+
+		for (const [path, info] of uniqueSuccessFiles) {
+			// Update all references except the active view (which is handled by the editor update below)
+			await this.updateAllVaultReferences(info.file, info.newPath, view.file || undefined);
+		}
+
         // Apply editor updates in batch
         // We need to re-verify line numbers or just trust descending order if document hasn't changed.
         // Since we blocked (await Promise.all), if user didn't edit, it's fine.
@@ -1967,7 +1982,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		if (successMatches.length > 0) {
 			const changes = successMatches.map(item => {
 				const match = item.match;
-				const finalPath = this.getRelativePathForNote(view, item.newPath);
+				const finalPath = this.getRelativePathForNote(view, item.newPath, match.path);
 				let processedPath = finalPath;
 				if (match.path.includes('%20') || match.path.includes(' ')) {
 					processedPath = finalPath.replace(/ /g, '%20');
@@ -2090,6 +2105,70 @@ export default class ImageRoundedFramePlugin extends Plugin {
 	}
 
 	/**
+	 * Updates all references to an image file across the entire vault.
+	 */
+	private async updateAllVaultReferences(targetFile: TFile, newPath: string, skipFile?: TFile): Promise<void> {
+		const allFiles = this.app.vault.getMarkdownFiles();
+		let updatedCount = 0;
+
+		for (const file of allFiles) {
+			if (skipFile && file.path === skipFile.path) continue;
+
+			let changed = false;
+			await this.app.vault.process(file, (content) => {
+				let newContent = content;
+
+				// 1. Markdown references: ![alt](path) or ![alt](<path with spaces>)
+				const mdRegex = /!\[([^\]]*)\]\((?:<([^>]+)>|([^)\s]+))(?:\s+"([^"]*)")?\)/g;
+				newContent = newContent.replace(mdRegex, (match, alt, pathBrackets, pathNormal, title) => {
+					const linkPath = pathBrackets || pathNormal;
+					const resolved = this.app.metadataCache.getFirstLinkpathDest(linkPath, file.path);
+					if (resolved && resolved.path === targetFile.path) {
+						changed = true;
+						const finalPath = this.getRelativePathForNote(file, newPath, linkPath);
+						const processedPath = (linkPath.includes('%20') || linkPath.includes(' ')) ? finalPath.replace(/ /g, '%20') : finalPath;
+						const titleStr = title ? ` "${title}"` : '';
+						return `![${alt}](${processedPath}${titleStr})`;
+					}
+					return match;
+				});
+
+				// 2. Wikilink references: ![[path|alt]]
+				const wikiRegex = /!\[\[([^|\]]+)(?:\|([^\]]+))?\]\]/g;
+				newContent = newContent.replace(wikiRegex, (match, linkPath, alt) => {
+					const resolved = this.app.metadataCache.getFirstLinkpathDest(linkPath, file.path);
+					if (resolved && resolved.path === targetFile.path) {
+						changed = true;
+						const finalPath = this.getRelativePathForNote(file, newPath, linkPath);
+						const altStr = alt ? `|${alt}` : '';
+						return `![[${finalPath}${altStr}]]`;
+					}
+					return match;
+				});
+
+				// 3. HTML img tags: <img src="path">
+				const htmlRegex = /<img([^>]+)src=["']([^"']+)["']([^>]*)>/gi;
+				newContent = newContent.replace(htmlRegex, (match, before, src, after) => {
+					const resolved = this.app.metadataCache.getFirstLinkpathDest(src, file.path);
+					if (resolved && resolved.path === targetFile.path) {
+						changed = true;
+						const finalPath = this.getRelativePathForNote(file, newPath, src);
+						return `<img${before}src="${finalPath}"${after}>`;
+					}
+					return match;
+				});
+
+				return newContent;
+			});
+			if (changed) updatedCount++;
+		}
+
+		if (updatedCount > 0) {
+			await this.appendDebugLog('VAULT_REFERENCES_UPDATED', { target: targetFile.path, updatedFiles: updatedCount });
+		}
+	}
+
+	/**
 	 * Watch Mode handler for newly created files
 	 */
 	private async handleFileCreated(file: TFile): Promise<void> {
@@ -2174,6 +2253,9 @@ export default class ImageRoundedFramePlugin extends Plugin {
 					await this.appendDebugLog('WATCH_MODE_OVERWRITE_FAILED', { path: file.path, error: String(err) });
 				}
 			} else {
+				// 6. Update references across vault if not overwriting
+				await this.updateAllVaultReferences(freshFile, newPath);
+				
 				new Notice(`Watch Mode: Created rounded version of ${file.name}`, 3000);
 				await this.appendDebugLog('WATCH_MODE_SUCCESS', { source: file.path, output: newPath, backup });
 			}

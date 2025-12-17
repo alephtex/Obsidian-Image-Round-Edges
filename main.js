@@ -1356,12 +1356,12 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
     await this.processImageFilesQueue(view, imageFiles, radius, unit, shadow, border);
     return;
   }
-  getRelativePathForNote(view, absolutePath) {
+  getRelativePathForNote(viewOrFile, absolutePath, originalPath) {
     var _a, _b, _c, _d;
-    const originalPath = absolutePath;
-    const currentFile = view.file;
+    const styleBase = originalPath != null ? originalPath : absolutePath;
+    const currentFile = viewOrFile instanceof import_obsidian3.TFile ? viewOrFile : viewOrFile.file;
     let finalPath = absolutePath;
-    if (originalPath.startsWith("./") && currentFile) {
+    if (styleBase.startsWith("./") && currentFile) {
       const newFile = this.app.vault.getAbstractFileByPath(absolutePath);
       if (newFile) {
         const currentDir = ((_a = currentFile.parent) == null ? void 0 : _a.path) || "";
@@ -1388,7 +1388,7 @@ var ImageRoundedFramePlugin = class extends import_obsidian3.Plugin {
           }
         }
       }
-    } else if (!originalPath.startsWith("/") && !/^[A-Za-z]:/.test(originalPath) && !originalPath.startsWith("./") && currentFile) {
+    } else if (!styleBase.startsWith("/") && !/^[A-Za-z]:/.test(styleBase) && !styleBase.startsWith("./") && currentFile) {
       const newFile = this.app.vault.getAbstractFileByPath(absolutePath);
       if (newFile) {
         const currentDir = ((_c = currentFile.parent) == null ? void 0 : _c.path) || "";
@@ -2057,7 +2057,7 @@ Check the console for detailed file list.`;
     }
   }
   updateReference(editor, view, match, newPath) {
-    const finalPath = this.getRelativePathForNote(view, newPath);
+    const finalPath = this.getRelativePathForNote(view, newPath, match.path);
     const originalPath = match.path;
     let processedPath = finalPath;
     if (originalPath.includes("%20") || originalPath.includes(" ")) {
@@ -2295,6 +2295,16 @@ ${JSON.stringify(details, null, 2)}`;
       }));
     }
     await Promise.all(tasks);
+    const uniqueSuccessFiles = /* @__PURE__ */ new Map();
+    for (const item of successMatches) {
+      const file = this.resolveTFile(view, item.match.path);
+      if (file) {
+        uniqueSuccessFiles.set(file.path, { file, newPath: item.newPath });
+      }
+    }
+    for (const [path2, info] of uniqueSuccessFiles) {
+      await this.updateAllVaultReferences(info.file, info.newPath, view.file || void 0);
+    }
     successMatches.sort((a, b) => {
       if (a.match.lineNumber !== b.match.lineNumber) {
         return b.match.lineNumber - a.match.lineNumber;
@@ -2304,7 +2314,7 @@ ${JSON.stringify(details, null, 2)}`;
     if (successMatches.length > 0) {
       const changes = successMatches.map((item) => {
         const match = item.match;
-        const finalPath = this.getRelativePathForNote(view, item.newPath);
+        const finalPath = this.getRelativePathForNote(view, item.newPath, match.path);
         let processedPath = finalPath;
         if (match.path.includes("%20") || match.path.includes(" ")) {
           processedPath = finalPath.replace(/ /g, "%20");
@@ -2449,6 +2459,61 @@ ${JSON.stringify(details, null, 2)}`;
     }
   }
   /**
+   * Updates all references to an image file across the entire vault.
+   */
+  async updateAllVaultReferences(targetFile, newPath, skipFile) {
+    const allFiles = this.app.vault.getMarkdownFiles();
+    let updatedCount = 0;
+    for (const file of allFiles) {
+      if (skipFile && file.path === skipFile.path)
+        continue;
+      let changed = false;
+      await this.app.vault.process(file, (content) => {
+        let newContent = content;
+        const mdRegex = /!\[([^\]]*)\]\((?:<([^>]+)>|([^)\s]+))(?:\s+"([^"]*)")?\)/g;
+        newContent = newContent.replace(mdRegex, (match, alt, pathBrackets, pathNormal, title) => {
+          const linkPath = pathBrackets || pathNormal;
+          const resolved = this.app.metadataCache.getFirstLinkpathDest(linkPath, file.path);
+          if (resolved && resolved.path === targetFile.path) {
+            changed = true;
+            const finalPath = this.getRelativePathForNote(file, newPath, linkPath);
+            const processedPath = linkPath.includes("%20") || linkPath.includes(" ") ? finalPath.replace(/ /g, "%20") : finalPath;
+            const titleStr = title ? ` "${title}"` : "";
+            return `![${alt}](${processedPath}${titleStr})`;
+          }
+          return match;
+        });
+        const wikiRegex = /!\[\[([^|\]]+)(?:\|([^\]]+))?\]\]/g;
+        newContent = newContent.replace(wikiRegex, (match, linkPath, alt) => {
+          const resolved = this.app.metadataCache.getFirstLinkpathDest(linkPath, file.path);
+          if (resolved && resolved.path === targetFile.path) {
+            changed = true;
+            const finalPath = this.getRelativePathForNote(file, newPath, linkPath);
+            const altStr = alt ? `|${alt}` : "";
+            return `![[${finalPath}${altStr}]]`;
+          }
+          return match;
+        });
+        const htmlRegex = /<img([^>]+)src=["']([^"']+)["']([^>]*)>/gi;
+        newContent = newContent.replace(htmlRegex, (match, before, src, after) => {
+          const resolved = this.app.metadataCache.getFirstLinkpathDest(src, file.path);
+          if (resolved && resolved.path === targetFile.path) {
+            changed = true;
+            const finalPath = this.getRelativePathForNote(file, newPath, src);
+            return `<img${before}src="${finalPath}"${after}>`;
+          }
+          return match;
+        });
+        return newContent;
+      });
+      if (changed)
+        updatedCount++;
+    }
+    if (updatedCount > 0) {
+      await this.appendDebugLog("VAULT_REFERENCES_UPDATED", { target: targetFile.path, updatedFiles: updatedCount });
+    }
+  }
+  /**
    * Watch Mode handler for newly created files
    */
   async handleFileCreated(file) {
@@ -2513,6 +2578,7 @@ ${JSON.stringify(details, null, 2)}`;
           await this.appendDebugLog("WATCH_MODE_OVERWRITE_FAILED", { path: file.path, error: String(err) });
         }
       } else {
+        await this.updateAllVaultReferences(freshFile, newPath);
         new import_obsidian3.Notice(`Watch Mode: Created rounded version of ${file.name}`, 3e3);
         await this.appendDebugLog("WATCH_MODE_SUCCESS", { source: file.path, output: newPath, backup });
       }
