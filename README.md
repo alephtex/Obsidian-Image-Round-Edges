@@ -3,220 +3,72 @@
 [![GitHub](https://img.shields.io/badge/GitHub-alephtex/Obsidian--Image--Round--Edges-blue)](https://github.com/alephtex/Obsidian-Image-Round-Edges)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-An Obsidian plugin that allows you to apply rounded corners to images in your notes. The plugin physically modifies image files to create transparent rounded corners.
+An Obsidian plugin that allows you to apply rounded corners, shadows, and borders to images in your notes. The plugin physically modifies image files to create transparent rounded corners, ensuring your notes look beautiful across all devices and export formats.
 
-## Features
+## ✨ Latest Features (v1.5.0)
 
-- Apply rounded frames to visible images or all images in a note
-- Adjustable border radius from 0% to 100% (or pixel values)
-- Symmetrical rounding based on the smaller dimension of the image
-- Supports Markdown images, Wikilinks, and HTML img tags
-- Uses Python PIL/Pillow for robust image processing with Canvas API fallback
+- **Single-Image System (Default)**: By default, the plugin now overwrites the original image file. No more cluttered folders with `-rounded-` copies! Your note links stay exactly the same.
+- **Watch Mode**: Automatically apply your default rounding settings to new images added to your vault.
+    - **Targeted Watching**: Only processes images if they are referenced in a currently open note tab.
+    - **Smart Delay**: Waits for the file to be fully written before processing.
+- **Dual Image System (Optional)**: Prefer keeping copies? Toggle the "Dual Image System" in settings to create new `-rounded-` files and update note links automatically.
+- **Auto-Crop**: Automatically trims transparent edges after rounding, ensuring the most outer visible pixel is the image edge.
+- **UI Auto-Refresh**: Explicitly triggers an Obsidian re-render so you see the updated pixels immediately, even when the filename hasn't changed.
+- **Grouped Settings**: Improved settings UI organized into General, Appearance, Shadow, Border, and Watch Mode sections.
 
-### ✨ Latest Features (v1.4.0)
+## 🚀 Core Features
 
-- **Sequential Queue Processing**: 500ms delay between images with real-time progress popup
-- **Interactive Confirmation Popup**: Floating top-right popup to confirm or undo actions immediately
-- **Dual Backup System**: Hidden folder + local backups for maximum data safety
-- **Robust Path Sanitization**: Handles malformed/embedded image references gracefully
-- **Debug Logging**: Automatic vault-root logging of all failures for easy diagnosis
-- **Embedded Python Script**: Auto-installs processing script, no manual setup needed
-- **Overwrite-Safe Processing**: Handles existing files without errors
-- **Always-Visible Commands**: All commands available in palette regardless of context
+- **Adjustable Styling**: Pick any border radius (percent or pixels), add customizable box shadows, and choose border styles (solid, dashed, dotted).
+- **Batch Processing**: Apply rounding to visible images, the entire current note, a subfolder, or your whole vault.
+- **Interactive Modal**: See a live preview of your changes before applying them.
+- **Multi-Format Support**: Works with Markdown `![alt](path)`, Wikilinks `![[path]]`, and HTML `<img src>`.
+- **Intelligent Resolution**: Robust image finding that handles case-insensitive filenames, URL encoding, and partial paths.
+- **Safety First**:
+    - **Dual Backup System**: Automatically creates backups in a hidden `.obsidian-image-round-edges-backups/` folder and optional local backups.
+    - **Atomic Operations**: Processes to temporary files first to prevent corruption.
+    - **Queue System**: Process large amounts of images smoothly with real-time progress tracking.
 
-### ✨ Previous Major Features
+## 📋 Requirements
 
-- **Referenced Image Detection**: Finds and processes images linked in your notes (Markdown, Wikilinks, HTML)
-- **Smart Path Resolution**: Handles complex paths, URL encoding, and relative references
-- **Safety First**: Only updates note references after verifying processed images exist and are valid
-- **Error Recovery**: Atomic operations prevent broken links and maintain note integrity
-
-- **Live Preview**: See all affected images simultaneously in the modal
-- **Advanced Shadow Effects**: Customizable box shadows with color, blur, and offset controls
-- **Advanced Border Effects**: Customizable borders with color, width, and style (solid/dashed/dotted)
-- **Interactive Controls**: Direct color pickers and sliders in the modal
-- **Undo/Redo**: Experimental undo/redo functionality in the modal
-- **Enhanced Settings**: Configure all shadow and border defaults
-- **Bulk Processing**: Process all images in current subfolder or entire vault
-- **Referenced Image Detection**: Finds and processes images referenced in notes, not just physical files
-
-## Requirements
-
-- **Obsidian**: v0.12.0 or higher
-- **Python 3**: Latest version recommended
+- **Obsidian**: v0.15.0 or higher
+- **Python 3**: Installed and added to your PATH
 - **Pillow (PIL)**: `pip install Pillow`
 
-## Installation
+## 🛠️ Installation
 
-1. Copy the plugin files to your Obsidian vault's `.obsidian/plugins/obsidian-image-round-edges/` directory
-2. Install Python dependencies: `pip install Pillow`
-3. Enable the plugin in Obsidian's Community Plugins settings
+1. Copy the plugin files (`main.js`, `manifest.json`) to your Obsidian vault's `.obsidian/plugins/obsidian-image-round-edges/` directory.
+2. Install the required Python library: `pip install Pillow`.
+3. Enable the plugin in Obsidian's **Community Plugins** settings.
 
-## Usage
-
-- **Command: "Rounded frame: apply to visible images"** - Processes all images currently visible in the editor
-- **Command: "Rounded frame: apply to all images in note"** - Processes all images in the current note
-
-When you run a command, a modal will appear allowing you:
-- Adjust the border radius using a slider (0-100%)
-- Enter pixel values directly
-- See a live preview of the rounded image
-- Apply or reset the changes
-
-## Bulk Processing
-
-The plugin supports two types of bulk processing:
-
-### Referenced Images
-The commands find **all images referenced in your notes**, not just physical files. This means:
-
-- Images linked with `![alt](path/to/image.png)`
-- Wikilinks like `![[image.png|alt]]`
-- HTML img tags: `<img src="path/to/image.png">`
-- **Already processed images** (with `-rounded-` suffix) are also found and can be re-processed
+## 📖 Usage
 
 ### Commands
+- **"Rounded frame: apply to visible images"**: Process images currently on your screen.
+- **"Rounded frame: apply to all images in note"**: Process everything in the active document.
+- **"Rounded frame: process all images in current subfolder"**: Bulk process a specific project area.
+- **"Rounded frame: process all images in vault"**: Process your entire knowledge base.
 
-- **"Rounded frame: process all images in current subfolder"**
-  - Finds all images referenced in notes within the current folder and subfolders
-  - Also includes any physical image files in those folders
-  - Perfect for processing a specific project or section
+### Watch Mode
+1. Enable **Watch Mode** in settings.
+2. Drag and drop a new image into an open note.
+3. The plugin will automatically apply your default rounding and styling instantly.
 
-- **"Rounded frame: process all images in vault"**
-  - Finds all images referenced across your entire vault
-  - Includes physical image files from all folders
-  - Comprehensive processing of your entire knowledge base
+## ⚙️ Settings
 
-### How it works
+- **Dual Image System**: Choose between overwriting the original file or creating a new copy.
+- **Watch Mode**: Enable/Disable auto-processing and filter by specific folders.
+- **Appearance**: Set default radius, units, and remember last used values.
+- **Effects**: Configure global defaults for shadows (color, blur, offset) and borders (color, width, style).
+- **Debug Mode**: Verbose logging to a debug file for troubleshooting.
 
-1. **Scan markdown files** for image references using regex patterns
-2. **Resolve relative paths** from the note's location
-3. **Combine with physical files** found in the folder structure
-4. **Deduplicate** to avoid processing the same image multiple times
-5. **Process all found images** with your chosen settings
+## 📂 Technical Details
 
-Images are processed in their original folders and saved with rounded versions alongside the originals, maintaining your vault's organization.
+The plugin uses a high-performance Python bridge (`round_image.py`) leveraging the **Pillow** library for pixel-perfect transparency and effects. It includes an internal Canvas API fallback for environments where Python might be unavailable.
 
-### Safety Features
+## 🤝 Contributing
 
-- **File Verification**: References in notes are only updated after confirming the processed image was successfully saved
-- **Existence Checks**: Plugin verifies processed images exist and are not empty before updating links
-- **Error Recovery**: Failed image processing doesn't break note references
-- **Atomic Operations**: Each image is fully processed before moving to the next
+Contributions are welcome! Please feel free to submit a Pull Request or open an issue on [GitHub](https://github.com/alephtex/Obsidian-Image-Round-Edges/issues).
 
-## Settings
-
-- **Default unit**: Choose between percent or pixels
-- **Default radius**: Set your preferred border radius value
-- **Remember last used values**: Plugin remembers your last settings
-
-## Examples
-
-### Before and After
-```markdown
-<!-- Original image -->
-![original](image.png)
-
-<!-- After applying 25% rounded corners -->
-![rounded](image-rounded-25p.png)
-```
-
-### Supported Image Formats
-- PNG, JPG, JPEG, GIF, WebP
-- Works with local images and URLs
-
-## Technical Details
-
-The plugin uses a Python script (`round_image.py`) to process images, creating transparent rounded corners. Modified images are saved with a suffix indicating the rounding applied (e.g., `image-rounded-25p.png`).
-
-## Troubleshooting
-
-### Common Issues
-
-**Python not found**
-- Ensure Python 3 is installed and added to your PATH
-- Try running `python --version` in your terminal
-
-**Pillow not installed**
-- Install with: `pip install Pillow`
-- If you have multiple Python versions, use `pip3 install Pillow`
-
-**Images not processing**
-- Check that the image file exists and is accessible
-- Ensure the image format is supported (PNG, JPG, JPEG, GIF, WebP)
-- Try restarting Obsidian after enabling the plugin
-
-**Plugin not appearing in Obsidian**
-- Verify files are in the correct directory: `.obsidian/plugins/obsidian-image-round-edges/`
-- Check that `manifest.json` exists in the plugin folder
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## Support
-
-If you encounter any issues or have questions:
-
-- Open an issue on [GitHub](https://github.com/alephtex/Obsidian-Image-Round-Edges/issues)
-- Check the troubleshooting section above
-- Ensure you're using the latest version of the plugin
-
-## Changelog
-
-### v1.4.0
-- **Queue System**: Sequential processing with 500ms delay between images
-- **Progress Popup**: Real-time top-right popup showing done/success/failed counts
-- **Confirmation Popup**: Interactive floating popup to confirm or undo actions after processing
-- **Dual Backups**: Hidden folder (`.obsidian-image-round-edges-backups/`) + local backups (`filename.backup-timestamp.ext`)
-- **Path Sanitization**: Robust extraction of image paths from malformed/embedded references
-- **Debug Logging**: Automatic `image-rounded-frame-debug.log` in vault root with timestamped failure details
-- **Embedded Python**: Auto-installs `round_image.py` on plugin load, no manual setup
-- **Overwrite-Safe**: Processes to temp files then writes to final location, handles existing files
-- **Always-Visible Commands**: All commands show in palette with runtime validation
-- **Continue-on-Failure**: Queue processes remaining images even if some fail
-- **Emergency Recovery**: Command to scan and list all backup files
-- **Force Cleanup**: Command to remove all backup files with confirmation
-
-### v1.3.0
-- Added interactive shadow controls: color picker, blur slider, offset slider
-- Added interactive border controls: color picker, width slider, style selector (solid/dashed/dotted)
-- Enhanced modal UI with collapsible sections for advanced controls
-- Added real-time preview updates for all shadow and border changes
-- Improved settings UI with border style dropdown
-- Added comprehensive undo/redo support for all interactive controls
-
-### v1.2.0
-- Added comprehensive referenced image detection - finds images linked in notes, not just physical files
-- Added multi-format support: Markdown `![alt](path)`, Wikilinks `![[path]]`, HTML `<img src>`
-- Added URL decoding for encoded paths (e.g., `%20` spaces, emojis)
-- Added intelligent path resolution with multiple strategies
-- Added safety verification: references only updated after confirming processed images exist
-- Added file existence and size validation before link updates
-- Added atomic operations with error recovery
-- Enhanced bulk processing with progress tracking and error isolation
-
-### v1.1.0
-- Added live preview showing all affected images simultaneously
-- Added shadow effects with customizable color, blur, and offset
-- Added border effects with customizable color and width
-- Added undo/redo functionality in modal
-- Added bulk processing commands for subfolder and vault-wide image processing
-- Improved multi-image reference updating with correct position handling
-- Enhanced settings UI with shadow and border configuration
-
-### v1.0.0
-- Initial release
-- Basic image rounding functionality
-- Support for multiple image formats
-- Adjustable border radius (percent/pixel)
-
-## License
+## 📄 License
 
 MIT - see the [LICENSE](LICENSE) file for details.
