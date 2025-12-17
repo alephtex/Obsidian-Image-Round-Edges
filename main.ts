@@ -1771,12 +1771,15 @@ export default class ImageRoundedFramePlugin extends Plugin {
 	}
 
 	private async appendDebugLog(event: string, details?: Record<string, any>): Promise<void> {
+		if (!this.settings.debugMode) return;
 		try {
 			const timestamp = new Date().toISOString();
 			let entry = `[${timestamp}] ${event}`;
 			if (details) {
 				entry += `\n${JSON.stringify(details, null, 2)}`;
 			}
+			console.log(`[Image Rounded Frame Debug] ${entry}`);
+			
 			entry += `\n`;
 
 			const existing = this.app.vault.getAbstractFileByPath(this.DEBUG_LOG_PATH) as TFile | null;
@@ -1866,10 +1869,11 @@ export default class ImageRoundedFramePlugin extends Plugin {
                 try {
                     const file = this.resolveTFile(view, m.path);
                     if (!file) { 
-                        await this.appendDebugLog('FILE_NOT_FOUND', { path: m.path, mode: 'note' }); 
+                        await this.appendDebugLog('FILE_NOT_FOUND', { path: m.path, mode: 'note', resolution_attempts: ['metadataCache', 'direct', 'relative', 'vault_search'] }); 
                         failed++; done++; this.updateProgressPopup(done, success, failed, total); 
                         return; 
                     }
+                    await this.appendDebugLog('FILE_FOUND', { path: m.path, resolved_path: file.path });
 
                     // Ensure readable
                     try { await this.app.vault.readBinary(file); } catch (readErr: any) { await this.appendDebugLog('READ_FAILED', { path: m.path, error: String(readErr) }); failed++; done++; this.updateProgressPopup(done, success, failed, total); return; }
@@ -1878,6 +1882,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
                     const hiddenBackup = await this.createBackup(file.path);
                     const localBackup = await this.createLocalBackup(file.path);
                     if (!hiddenBackup && !localBackup) { await this.appendDebugLog('BACKUP_FAILED', { path: file.path }); failed++; done++; this.updateProgressPopup(done, success, failed, total); return; }
+                    await this.appendDebugLog('BACKUP_CREATED', { hidden: hiddenBackup, local: localBackup });
 
                     try {
                         const { newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
@@ -1898,6 +1903,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
                         if (localBackup) localBackupPaths.push(localBackup);
                         newPaths.push(newPath);
                         success++;
+                        await this.appendDebugLog('PROCESSING_SUCCESS', { source: file.path, output: newPath });
                     } catch (err: any) {
                         // On failure, try to remove backups to avoid clutter if nothing changed
                         try { if (hiddenBackup) { const bf = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (bf) await this.app.vault.delete(bf); } } catch {}
@@ -1984,6 +1990,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
                     const hiddenBackup = await this.createBackup(imageFile.path);
                     const localBackup = await this.createLocalBackup(imageFile.path);
                     if (!hiddenBackup && !localBackup) { await this.appendDebugLog('BACKUP_FAILED', { path: imageFile.path }); failed++; done++; this.updateProgressPopup(done, success, failed, total); return; }
+                    await this.appendDebugLog('BACKUP_CREATED_BULK', { path: imageFile.path, hidden: hiddenBackup, local: localBackup });
 
                     try {
                         const { newPath } = await this.roundImageFile(imageFile, radius, unit, shadow, border);
@@ -1999,6 +2006,7 @@ export default class ImageRoundedFramePlugin extends Plugin {
                         if (localBackup) localBackupPaths.push(localBackup);
                         newPaths.push(newPath);
                         success++;
+                        await this.appendDebugLog('PROCESSING_SUCCESS_BULK', { source: imageFile.path, output: newPath });
                     } catch (err: any) {
                         try { if (hiddenBackup) { const bf = this.app.vault.getAbstractFileByPath(hiddenBackup) as TFile | null; if (bf) await this.app.vault.delete(bf); } } catch {}
                         try { if (localBackup) { const lbf = this.app.vault.getAbstractFileByPath(localBackup) as TFile | null; if (lbf) await this.app.vault.delete(lbf); } } catch {}

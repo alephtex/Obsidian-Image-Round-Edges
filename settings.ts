@@ -24,6 +24,7 @@ export interface RoundedFrameSettings {
 	borderColor: string;
 	borderWidth: number;
 	borderStyle: 'solid' | 'dashed' | 'dotted';
+	debugMode: boolean;
 }
 
 export const DEFAULT_SETTINGS: RoundedFrameSettings = {
@@ -43,6 +44,7 @@ export const DEFAULT_SETTINGS: RoundedFrameSettings = {
 	borderColor: '#cccccc',
 	borderWidth: 2,
 	borderStyle: 'solid',
+	debugMode: false,
 };
 
 export class RoundedFrameSettingTab extends PluginSettingTab {
@@ -55,6 +57,17 @@ export class RoundedFrameSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		containerEl.createEl('h2', { text: 'Image Rounded Frame' });
+
+		new Setting(containerEl)
+			.setName('Debug Mode')
+			.setDesc('Enable verbose logging to debug issues. Logs will be written to the developer console.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.debugMode);
+				toggle.onChange(async (value) => {
+					this.plugin.settings.debugMode = value;
+					await this.plugin.saveSettings();
+				});
+			});
 
 		new Setting(containerEl)
 			.setName('Default unit')
