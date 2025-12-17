@@ -2530,6 +2530,7 @@ ${JSON.stringify(details, null, 2)}`;
    * Watch Mode handler for newly created files
    */
   async handleFileCreated(file) {
+    var _a, _b;
     const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
     if (!imageExtensions.includes(file.extension.toLowerCase()))
       return;
@@ -2543,6 +2544,26 @@ ${JSON.stringify(details, null, 2)}`;
         return;
     }
     await this.appendDebugLog("WATCH_MODE_TRIGGERED", { path: file.path });
+    await new Promise((resolve) => setTimeout(resolve, 1e3));
+    const openMarkdownViews = this.app.workspace.getLeavesOfType("markdown").map((leaf) => leaf.view);
+    let isReferenced = false;
+    for (const view of openMarkdownViews) {
+      const content = view.editor.getValue();
+      const refs = this.extractImageReferences(content);
+      for (const ref of refs) {
+        const resolved = this.app.metadataCache.getFirstLinkpathDest(ref, (_b = (_a = view.file) == null ? void 0 : _a.path) != null ? _b : "");
+        if (resolved && resolved.path === file.path) {
+          isReferenced = true;
+          break;
+        }
+      }
+      if (isReferenced)
+        break;
+    }
+    if (!isReferenced) {
+      await this.appendDebugLog("WATCH_MODE_SKIPPED", { path: file.path, reason: "Not referenced in any open note" });
+      return;
+    }
     const radius = this.settings.defaultUnit === "percent" ? this.settings.defaultPercent : this.settings.defaultPx;
     const unit = this.settings.defaultUnit;
     const shadow = {

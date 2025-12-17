@@ -2206,6 +2206,31 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 		await this.appendDebugLog('WATCH_MODE_TRIGGERED', { path: file.path });
 
+		// 3.5 Only process if the file is referenced in an open markdown note
+		// This ensures we only process images the user is actually using right now
+		await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for link insertion
+		const openMarkdownViews = this.app.workspace.getLeavesOfType('markdown')
+			.map(leaf => leaf.view as MarkdownView);
+		
+		let isReferenced = false;
+		for (const view of openMarkdownViews) {
+			const content = view.editor.getValue();
+			const refs = this.extractImageReferences(content);
+			for (const ref of refs) {
+				const resolved = this.app.metadataCache.getFirstLinkpathDest(ref, view.file?.path ?? '');
+				if (resolved && resolved.path === file.path) {
+					isReferenced = true;
+					break;
+				}
+			}
+			if (isReferenced) break;
+		}
+
+		if (!isReferenced) {
+			await this.appendDebugLog('WATCH_MODE_SKIPPED', { path: file.path, reason: 'Not referenced in any open note' });
+			return;
+		}
+
 		// 4. Processing logic (using default settings)
 		const radius = this.settings.defaultUnit === 'percent' ? this.settings.defaultPercent : this.settings.defaultPx;
 		const unit = this.settings.defaultUnit;
