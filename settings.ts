@@ -25,6 +25,8 @@ export interface RoundedFrameSettings {
 	borderWidth: number;
 	borderStyle: 'solid' | 'dashed' | 'dotted';
 	debugMode: boolean;
+	watchMode: boolean;
+	watchFolders: string;
 }
 
 export const DEFAULT_SETTINGS: RoundedFrameSettings = {
@@ -45,6 +47,8 @@ export const DEFAULT_SETTINGS: RoundedFrameSettings = {
 	borderWidth: 2,
 	borderStyle: 'solid',
 	debugMode: false,
+	watchMode: false,
+	watchFolders: '',
 };
 
 export class RoundedFrameSettingTab extends PluginSettingTab {
@@ -225,6 +229,33 @@ export class RoundedFrameSettingTab extends PluginSettingTab {
 					this.plugin.settings.borderStyle = value as 'solid' | 'dashed' | 'dotted';
 					await this.plugin.saveSettings();
 				});
+			});
+
+		// Watch Mode settings
+		containerEl.createEl('h3', { text: 'Watch Mode' });
+
+		new Setting(containerEl)
+			.setName('Enable Watch Mode')
+			.setDesc('Automatically apply rounding to new images added to your vault.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.watchMode);
+				toggle.onChange(async (value) => {
+					this.plugin.settings.watchMode = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Watched folders')
+			.setDesc('Comma-separated list of folders to watch (e.g., "attachments, photos"). Leave empty to watch entire vault.')
+			.addText((text) => {
+				text
+					.setPlaceholder('attachments, images')
+					.setValue(this.plugin.settings.watchFolders)
+					.onChange(async (value) => {
+						this.plugin.settings.watchFolders = value;
+						await this.plugin.saveSettings();
+					});
 			});
 	}
 }

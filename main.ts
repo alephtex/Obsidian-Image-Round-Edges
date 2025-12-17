@@ -260,6 +260,15 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		this.addSettingTab(new RoundedFrameSettingTab(this.app, this));
 		await this.ensurePythonScript();
 
+		// Register Watch Mode event listener
+		this.registerEvent(
+			this.app.vault.on('create', (file) => {
+				if (this.settings.watchMode && file instanceof TFile) {
+					this.handleFileCreated(file);
+				}
+			})
+		);
+
         // Command: apply to images currently visible in the active view
         this.addCommand({
             id: 'rounded-frame-apply-visible',
@@ -2078,5 +2087,68 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		}
 		this.finishProgressPopup(`Completed ${done}/${total}: ${success} success, ${failed} failed`);
 		if (failed > 0) { await this.appendDebugLog('SUMMARY_BULK', { total, success, failed }); }
+	}
+
+	/**
+	 * Watch Mode handler for newly created files
+	 */
+	private async handleFileCreated(file: TFile): Promise<void> {
+		// 1. Basic validation
+		const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'];
+		if (!imageExtensions.includes(file.extension.toLowerCase())) return;
+
+		// 2. Prevent infinite loops (don't process files created by this plugin)
+		if (file.name.includes('-rounded-')) return;
+
+		// 3. Folder filtering
+		if (this.settings.watchFolders.trim().length > 0) {
+			const folders = this.settings.watchFolders.split(',').map(f => f.trim().toLowerCase());
+			const filePath = file.path.toLowerCase();
+			const isInWatchedFolder = folders.some(folder => filePath.includes(folder + '/'));
+			if (!isInWatchedFolder) return;
+		}
+
+		await this.appendDebugLog('WATCH_MODE_TRIGGERED', { path: file.path });
+
+		// 4. Processing logic (using default settings)
+		const radius = this.settings.defaultUnit === 'percent' ? this.settings.defaultPercent : this.settings.defaultPx;
+		const unit = this.settings.defaultUnit;
+		
+		const shadow: ShadowOptions = {
+			enabled: this.settings.enableShadow,
+			color: this.settings.shadowColor,
+			blur: this.settings.shadowBlur,
+			offset: this.settings.shadowOffset
+		};
+
+		const border: BorderOptions = {
+			enabled: this.settings.enableBorder,
+			color: this.settings.borderColor,
+			width: this.settings.borderWidth,
+			style: this.settings.borderStyle
+		};
+
+		try {
+			// Small delay to ensure file is fully written by the OS/Obsidian
+			await new Promise(resolve => setTimeout(resolve, 1000));
+			
+			// Verify file still exists and isn't empty
+			const freshFile = this.app.vault.getAbstractFileByPath(file.path);
+			if (!freshFile || !(freshFile instanceof TFile) || freshFile.stat.size === 0) {
+				return;
+			}
+
+			// Hidden backup first for safety
+			const backup = await this.createBackup(file.path);
+			
+			const { newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
+			
+			new Notice(`Watch Mode: Applied rounded frame to ${file.name}`, 3000);
+			await this.appendDebugLog('WATCH_MODE_SUCCESS', { source: file.path, output: newPath, backup });
+
+		} catch (error) {
+			console.error('Watch Mode processing failed:', error);
+			await this.appendDebugLog('WATCH_MODE_FAILED', { path: file.path, error: String(error) });
+		}
 	}
 }
