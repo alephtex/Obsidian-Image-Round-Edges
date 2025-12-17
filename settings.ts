@@ -27,7 +27,7 @@ export interface RoundedFrameSettings {
 	debugMode: boolean;
 	watchMode: boolean;
 	watchFolders: string;
-	watchOverwrite: boolean;
+	dualImageSystem: boolean;
 }
 
 export const DEFAULT_SETTINGS: RoundedFrameSettings = {
@@ -50,7 +50,7 @@ export const DEFAULT_SETTINGS: RoundedFrameSettings = {
 	debugMode: false,
 	watchMode: false,
 	watchFolders: '',
-	watchOverwrite: false,
+	dualImageSystem: false,
 };
 
 export class RoundedFrameSettingTab extends PluginSettingTab {
@@ -64,9 +64,23 @@ export class RoundedFrameSettingTab extends PluginSettingTab {
 
 		containerEl.createEl('h2', { text: 'Image Rounded Frame' });
 
+		// --- GENERAL & SAFETY ---
+		containerEl.createEl('h3', { text: 'General & Safety' });
+
+		new Setting(containerEl)
+			.setName('Dual Image System')
+			.setDesc('If enabled, creates a new file (e.g., image-rounded.png). If disabled (default), overwrites the original file.')
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.dualImageSystem);
+				toggle.onChange(async (value) => {
+					this.plugin.settings.dualImageSystem = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
 		new Setting(containerEl)
 			.setName('Debug Mode')
-			.setDesc('Enable verbose logging to debug issues. Logs will be written to the developer console.')
+			.setDesc('Enable verbose logging to debug issues. Logs will be written to the developer console and a log file.')
 			.addToggle((toggle) => {
 				toggle.setValue(this.plugin.settings.debugMode);
 				toggle.onChange(async (value) => {
@@ -74,6 +88,9 @@ export class RoundedFrameSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				});
 			});
+
+		// --- DEFAULT APPEARANCE ---
+		containerEl.createEl('h3', { text: 'Default Appearance' });
 
 		new Setting(containerEl)
 			.setName('Default unit')
@@ -127,7 +144,7 @@ export class RoundedFrameSettingTab extends PluginSettingTab {
 				});
 			});
 
-		// Shadow settings
+		// --- SHADOW EFFECTS ---
 		containerEl.createEl('h3', { text: 'Shadow Effects' });
 
 		new Setting(containerEl)
@@ -180,7 +197,7 @@ export class RoundedFrameSettingTab extends PluginSettingTab {
 				});
 			});
 
-		// Border settings
+		// --- BORDER EFFECTS ---
 		containerEl.createEl('h3', { text: 'Border Effects' });
 
 		new Setting(containerEl)
@@ -233,7 +250,7 @@ export class RoundedFrameSettingTab extends PluginSettingTab {
 				});
 			});
 
-		// Watch Mode settings
+		// --- WATCH MODE ---
 		containerEl.createEl('h3', { text: 'Watch Mode' });
 
 		new Setting(containerEl)
@@ -259,17 +276,5 @@ export class RoundedFrameSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
-
-		new Setting(containerEl)
-			.setName('Watch Mode: Overwrite original')
-			.setDesc('If enabled, Watch Mode will overwrite the original image with the rounded version instead of creating a copy (a backup is still created in the hidden folder).')
-			.addToggle((toggle) => {
-				toggle.setValue(this.plugin.settings.watchOverwrite);
-				toggle.onChange(async (value) => {
-					this.plugin.settings.watchOverwrite = value;
-					await this.plugin.saveSettings();
-				});
-			});
 	}
 }
-

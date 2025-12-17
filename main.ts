@@ -1546,7 +1546,12 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		const folder = file.parent?.path ?? '';
 		const base = file.basename;
 		const suffix = unit === 'percent' ? `${radius}p` : `${radius}px`;
-		const newPath = folder ? `${folder}/${base}-rounded-${suffix}.png` : `${base}-rounded-${suffix}.png`;
+		
+		// Determine target path based on Dual Image System setting
+		const useSuffix = this.settings.dualImageSystem;
+		const newPath = useSuffix 
+			? (folder ? `${folder}/${base}-rounded-${suffix}.png` : `${base}-rounded-${suffix}.png`)
+			: file.path;
 
 		// Create temporary file path for safe processing
 		const tempPath = `${newPath}.processing-${Date.now()}`;
@@ -1964,7 +1969,10 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 		for (const [path, info] of uniqueSuccessFiles) {
 			// Update all references except the active view (which is handled by the editor update below)
-			await this.updateAllVaultReferences(info.file, info.newPath, view.file || undefined);
+			// ONLY if we are creating a NEW file (Dual Image System enabled)
+			if (this.settings.dualImageSystem) {
+				await this.updateAllVaultReferences(info.file, info.newPath, view.file || undefined);
+			}
 		}
 
         // Apply editor updates in batch
@@ -1978,8 +1986,8 @@ export default class ImageRoundedFramePlugin extends Plugin {
             return b.match.start - a.match.start;
         });
 
-		// Apply changes
-		if (successMatches.length > 0) {
+		// Apply changes ONLY if Dual Image System is enabled (because paths changed)
+		if (this.settings.dualImageSystem && successMatches.length > 0) {
 			const changes = successMatches.map(item => {
 				const match = item.match;
 				const finalPath = this.getRelativePathForNote(view, item.newPath, match.path);
@@ -2097,6 +2105,15 @@ export default class ImageRoundedFramePlugin extends Plugin {
         await Promise.all(tasks);
 
 		if (newPaths.length > 0) {
+			// Update vault references for bulk success if Dual Image System is enabled
+			if (this.settings.dualImageSystem) {
+				for (let i = 0; i < originalPaths.length; i++) {
+					const originalFile = this.app.vault.getAbstractFileByPath(originalPaths[i]) as TFile;
+					if (originalFile) {
+						await this.updateAllVaultReferences(originalFile, newPaths[i], view?.file || undefined);
+					}
+				}
+			}
 			this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: view?.file?.path ?? '', timestamp: Date.now() };
 			this.showActionConfirmationPopup();
 		}
@@ -2234,30 +2251,15 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			
 			const { newPath } = await this.roundImageFile(freshFile, radius, unit, shadow, border);
 			
-			// 5. Overwrite original if setting is enabled
-			if (this.settings.watchOverwrite) {
-				try {
-					const roundedFile = this.app.vault.getAbstractFileByPath(newPath);
-					if (roundedFile && roundedFile instanceof TFile) {
-						const content = await this.app.vault.readBinary(roundedFile);
-						// Overwrite original
-						await this.app.vault.modifyBinary(file, content);
-						// Delete the suffixed version
-						await this.app.vault.delete(roundedFile);
-						
-						new Notice(`Watch Mode: Rounded and replaced original ${file.name}`, 3000);
-						await this.appendDebugLog('WATCH_MODE_OVERWRITE_SUCCESS', { path: file.path, backup });
-					}
-				} catch (err) {
-					console.error('Watch Mode overwrite failed:', err);
-					await this.appendDebugLog('WATCH_MODE_OVERWRITE_FAILED', { path: file.path, error: String(err) });
-				}
-			} else {
-				// 6. Update references across vault if not overwriting
+			// 5. Update references across vault if we created a NEW file
+			if (this.settings.dualImageSystem) {
 				await this.updateAllVaultReferences(freshFile, newPath);
-				
 				new Notice(`Watch Mode: Created rounded version of ${file.name}`, 3000);
 				await this.appendDebugLog('WATCH_MODE_SUCCESS', { source: file.path, output: newPath, backup });
+			} else {
+				// Original file was overwritten directly by roundImageFile
+				new Notice(`Watch Mode: Rounded original ${file.name}`, 3000);
+				await this.appendDebugLog('WATCH_MODE_OVERWRITE_SUCCESS', { path: file.path, backup });
 			}
 
 		} catch (error) {

@@ -65,7 +65,7 @@ var DEFAULT_SETTINGS = {
   debugMode: false,
   watchMode: false,
   watchFolders: "",
-  watchOverwrite: false
+  dualImageSystem: false
 };
 var RoundedFrameSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -76,13 +76,22 @@ var RoundedFrameSettingTab = class extends import_obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Image Rounded Frame" });
-    new import_obsidian.Setting(containerEl).setName("Debug Mode").setDesc("Enable verbose logging to debug issues. Logs will be written to the developer console.").addToggle((toggle) => {
+    containerEl.createEl("h3", { text: "General & Safety" });
+    new import_obsidian.Setting(containerEl).setName("Dual Image System").setDesc("If enabled, creates a new file (e.g., image-rounded.png). If disabled (default), overwrites the original file.").addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.dualImageSystem);
+      toggle.onChange(async (value) => {
+        this.plugin.settings.dualImageSystem = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian.Setting(containerEl).setName("Debug Mode").setDesc("Enable verbose logging to debug issues. Logs will be written to the developer console and a log file.").addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.debugMode);
       toggle.onChange(async (value) => {
         this.plugin.settings.debugMode = value;
         await this.plugin.saveSettings();
       });
     });
+    containerEl.createEl("h3", { text: "Default Appearance" });
     new import_obsidian.Setting(containerEl).setName("Default unit").setDesc("Initial unit whenever you add a rounded frame.").addDropdown((dropdown) => {
       dropdown.addOption("percent", "Percent").addOption("px", "Pixels");
       dropdown.setValue(this.plugin.settings.defaultUnit);
@@ -185,13 +194,6 @@ var RoundedFrameSettingTab = class extends import_obsidian.PluginSettingTab {
     new import_obsidian.Setting(containerEl).setName("Watched folders").setDesc('Comma-separated list of folders to watch (e.g., "attachments, photos"). Leave empty to watch entire vault.').addText((text) => {
       text.setPlaceholder("attachments, images").setValue(this.plugin.settings.watchFolders).onChange(async (value) => {
         this.plugin.settings.watchFolders = value;
-        await this.plugin.saveSettings();
-      });
-    });
-    new import_obsidian.Setting(containerEl).setName("Watch Mode: Overwrite original").setDesc("If enabled, Watch Mode will overwrite the original image with the rounded version instead of creating a copy (a backup is still created in the hidden folder).").addToggle((toggle) => {
-      toggle.setValue(this.plugin.settings.watchOverwrite);
-      toggle.onChange(async (value) => {
-        this.plugin.settings.watchOverwrite = value;
         await this.plugin.saveSettings();
       });
     });
@@ -1915,7 +1917,8 @@ Check the console for detailed file list.`;
     const folder = (_b = (_a = file.parent) == null ? void 0 : _a.path) != null ? _b : "";
     const base = file.basename;
     const suffix = unit === "percent" ? `${radius}p` : `${radius}px`;
-    const newPath = folder ? `${folder}/${base}-rounded-${suffix}.png` : `${base}-rounded-${suffix}.png`;
+    const useSuffix = this.settings.dualImageSystem;
+    const newPath = useSuffix ? folder ? `${folder}/${base}-rounded-${suffix}.png` : `${base}-rounded-${suffix}.png` : file.path;
     const tempPath = `${newPath}.processing-${Date.now()}`;
     try {
       await this.roundImageWithPython(file.path, tempPath, radius, unit, shadow, border);
@@ -2303,7 +2306,9 @@ ${JSON.stringify(details, null, 2)}`;
       }
     }
     for (const [path2, info] of uniqueSuccessFiles) {
-      await this.updateAllVaultReferences(info.file, info.newPath, view.file || void 0);
+      if (this.settings.dualImageSystem) {
+        await this.updateAllVaultReferences(info.file, info.newPath, view.file || void 0);
+      }
     }
     successMatches.sort((a, b) => {
       if (a.match.lineNumber !== b.match.lineNumber) {
@@ -2311,7 +2316,7 @@ ${JSON.stringify(details, null, 2)}`;
       }
       return b.match.start - a.match.start;
     });
-    if (successMatches.length > 0) {
+    if (this.settings.dualImageSystem && successMatches.length > 0) {
       const changes = successMatches.map((item) => {
         const match = item.match;
         const finalPath = this.getRelativePathForNote(view, item.newPath, match.path);
@@ -2450,6 +2455,14 @@ ${JSON.stringify(details, null, 2)}`;
     }
     await Promise.all(tasks);
     if (newPaths.length > 0) {
+      if (this.settings.dualImageSystem) {
+        for (let i = 0; i < originalPaths.length; i++) {
+          const originalFile = this.app.vault.getAbstractFileByPath(originalPaths[i]);
+          if (originalFile) {
+            await this.updateAllVaultReferences(originalFile, newPaths[i], (view == null ? void 0 : view.file) || void 0);
+          }
+        }
+      }
       this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: (_b = (_a = view == null ? void 0 : view.file) == null ? void 0 : _a.path) != null ? _b : "", timestamp: Date.now() };
       this.showActionConfirmationPopup();
     }
@@ -2563,24 +2576,13 @@ ${JSON.stringify(details, null, 2)}`;
       const freshFile = this.app.vault.getAbstractFileByPath(file.path);
       const backup = await this.createBackup(freshFile.path);
       const { newPath } = await this.roundImageFile(freshFile, radius, unit, shadow, border);
-      if (this.settings.watchOverwrite) {
-        try {
-          const roundedFile = this.app.vault.getAbstractFileByPath(newPath);
-          if (roundedFile && roundedFile instanceof import_obsidian3.TFile) {
-            const content = await this.app.vault.readBinary(roundedFile);
-            await this.app.vault.modifyBinary(file, content);
-            await this.app.vault.delete(roundedFile);
-            new import_obsidian3.Notice(`Watch Mode: Rounded and replaced original ${file.name}`, 3e3);
-            await this.appendDebugLog("WATCH_MODE_OVERWRITE_SUCCESS", { path: file.path, backup });
-          }
-        } catch (err) {
-          console.error("Watch Mode overwrite failed:", err);
-          await this.appendDebugLog("WATCH_MODE_OVERWRITE_FAILED", { path: file.path, error: String(err) });
-        }
-      } else {
+      if (this.settings.dualImageSystem) {
         await this.updateAllVaultReferences(freshFile, newPath);
         new import_obsidian3.Notice(`Watch Mode: Created rounded version of ${file.name}`, 3e3);
         await this.appendDebugLog("WATCH_MODE_SUCCESS", { source: file.path, output: newPath, backup });
+      } else {
+        new import_obsidian3.Notice(`Watch Mode: Rounded original ${file.name}`, 3e3);
+        await this.appendDebugLog("WATCH_MODE_OVERWRITE_SUCCESS", { path: file.path, backup });
       }
     } catch (error) {
       console.error("Watch Mode processing failed:", error);
