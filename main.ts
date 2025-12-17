@@ -2033,6 +2033,12 @@ export default class ImageRoundedFramePlugin extends Plugin {
 					changes: changes
 				});
 			}
+		} else if (!this.settings.dualImageSystem && successMatches.length > 0) {
+			// Force refresh of the active view since files were overwritten
+			for (const item of successMatches) {
+				const file = this.resolveTFile(view, item.match.path);
+				if (file) this.refreshOpenNotes(file.path);
+			}
 		}
 
 		if (newPaths.length > 0) {
@@ -2208,26 +2214,44 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 		// 3.5 Only process if the file is referenced in an open markdown note
 		// This ensures we only process images the user is actually using right now
-		await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for link insertion
-		const openMarkdownViews = this.app.workspace.getLeavesOfType('markdown')
-			.map(leaf => leaf.view as MarkdownView);
-		
+		// We'll retry a few times as Obsidian might take a moment to insert the link
 		let isReferenced = false;
-		for (const view of openMarkdownViews) {
-			const content = view.editor.getValue();
-			const refs = this.extractImageReferences(content);
-			for (const ref of refs) {
-				const resolved = this.app.metadataCache.getFirstLinkpathDest(ref, view.file?.path ?? '');
-				if (resolved && resolved.path === file.path) {
+		let attempts = 0;
+		const filename = file.name;
+		
+		while (attempts < 5 && !isReferenced) {
+			const openMarkdownViews = this.app.workspace.getLeavesOfType('markdown')
+				.map(leaf => leaf.view as MarkdownView);
+			
+			for (const view of openMarkdownViews) {
+				const content = view.editor.getValue();
+				
+				// Quick string check first (fastest)
+				if (content.includes(filename)) {
 					isReferenced = true;
 					break;
 				}
+				
+				// Then formal regex check
+				const refs = this.extractImageReferences(content);
+				for (const ref of refs) {
+					const resolved = this.app.metadataCache.getFirstLinkpathDest(ref, view.file?.path ?? '');
+					if (resolved && resolved.path === file.path) {
+						isReferenced = true;
+						break;
+					}
+				}
+				if (isReferenced) break;
 			}
-			if (isReferenced) break;
+			
+			if (!isReferenced) {
+				await new Promise(resolve => setTimeout(resolve, 500));
+				attempts++;
+			}
 		}
 
 		if (!isReferenced) {
-			await this.appendDebugLog('WATCH_MODE_SKIPPED', { path: file.path, reason: 'Not referenced in any open note' });
+			await this.appendDebugLog('WATCH_MODE_SKIPPED', { path: file.path, reason: 'Not referenced in any open note after retries' });
 			return;
 		}
 
@@ -2283,6 +2307,9 @@ export default class ImageRoundedFramePlugin extends Plugin {
 				await this.appendDebugLog('WATCH_MODE_SUCCESS', { source: file.path, output: newPath, backup });
 			} else {
 				// Original file was overwritten directly by roundImageFile
+				// We need to force a refresh of the views to show the changes
+				this.refreshOpenNotes(freshFile.path);
+				
 				new Notice(`Watch Mode: Rounded original ${file.name}`, 3000);
 				await this.appendDebugLog('WATCH_MODE_OVERWRITE_SUCCESS', { path: file.path, backup });
 			}
@@ -2290,6 +2317,36 @@ export default class ImageRoundedFramePlugin extends Plugin {
 		} catch (error) {
 			console.error('Watch Mode processing failed:', error);
 			await this.appendDebugLog('WATCH_MODE_FAILED', { path: file.path, error: String(error) });
+		}
+	}
+
+	/**
+	 * Forces Obsidian to refresh its view of an image across all open notes.
+	 */
+	private refreshOpenNotes(filePath: string): void {
+		const leaves = this.app.workspace.getLeavesOfType('markdown');
+		for (const leaf of leaves) {
+			const view = leaf.view as MarkdownView;
+			const content = view.editor.getValue();
+			
+			// Check if this note contains a reference to the image
+			if (content.includes(filePath) || content.includes(path.basename(filePath))) {
+				// A simple "touch" to the editor content often triggers a re-render of widgets
+				// We'll append a space and remove it quickly
+				const editor = view.editor;
+				const cursor = editor.getCursor();
+				const lineCount = editor.lineCount();
+				const lastLine = editor.getLine(lineCount - 1);
+				
+				editor.replaceRange(' ', { line: lineCount - 1, ch: lastLine.length });
+				editor.replaceRange('', { line: lineCount - 1, ch: lastLine.length }, { line: lineCount - 1, ch: lastLine.length + 1 });
+				editor.setCursor(cursor);
+				
+				// Also try the internal preview refresh if available
+				if ((view as any).previewMode && (view as any).previewMode.rerender) {
+					(view as any).previewMode.rerender(true);
+				}
+			}
 		}
 	}
 }

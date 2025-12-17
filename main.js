@@ -2349,6 +2349,12 @@ ${JSON.stringify(details, null, 2)}`;
           changes
         });
       }
+    } else if (!this.settings.dualImageSystem && successMatches.length > 0) {
+      for (const item of successMatches) {
+        const file = this.resolveTFile(view, item.match.path);
+        if (file)
+          this.refreshOpenNotes(file.path);
+      }
     }
     if (newPaths.length > 0) {
       this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: (_b = (_a = view.file) == null ? void 0 : _a.path) != null ? _b : "", timestamp: Date.now() };
@@ -2544,24 +2550,35 @@ ${JSON.stringify(details, null, 2)}`;
         return;
     }
     await this.appendDebugLog("WATCH_MODE_TRIGGERED", { path: file.path });
-    await new Promise((resolve) => setTimeout(resolve, 1e3));
-    const openMarkdownViews = this.app.workspace.getLeavesOfType("markdown").map((leaf) => leaf.view);
     let isReferenced = false;
-    for (const view of openMarkdownViews) {
-      const content = view.editor.getValue();
-      const refs = this.extractImageReferences(content);
-      for (const ref of refs) {
-        const resolved = this.app.metadataCache.getFirstLinkpathDest(ref, (_b = (_a = view.file) == null ? void 0 : _a.path) != null ? _b : "");
-        if (resolved && resolved.path === file.path) {
+    let attempts = 0;
+    const filename = file.name;
+    while (attempts < 5 && !isReferenced) {
+      const openMarkdownViews = this.app.workspace.getLeavesOfType("markdown").map((leaf) => leaf.view);
+      for (const view of openMarkdownViews) {
+        const content = view.editor.getValue();
+        if (content.includes(filename)) {
           isReferenced = true;
           break;
         }
+        const refs = this.extractImageReferences(content);
+        for (const ref of refs) {
+          const resolved = this.app.metadataCache.getFirstLinkpathDest(ref, (_b = (_a = view.file) == null ? void 0 : _a.path) != null ? _b : "");
+          if (resolved && resolved.path === file.path) {
+            isReferenced = true;
+            break;
+          }
+        }
+        if (isReferenced)
+          break;
       }
-      if (isReferenced)
-        break;
+      if (!isReferenced) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        attempts++;
+      }
     }
     if (!isReferenced) {
-      await this.appendDebugLog("WATCH_MODE_SKIPPED", { path: file.path, reason: "Not referenced in any open note" });
+      await this.appendDebugLog("WATCH_MODE_SKIPPED", { path: file.path, reason: "Not referenced in any open note after retries" });
       return;
     }
     const radius = this.settings.defaultUnit === "percent" ? this.settings.defaultPercent : this.settings.defaultPx;
@@ -2579,16 +2596,16 @@ ${JSON.stringify(details, null, 2)}`;
       style: this.settings.borderStyle
     };
     try {
-      let attempts = 0;
+      let attempts2 = 0;
       let ready = false;
-      while (attempts < 10) {
+      while (attempts2 < 10) {
         const freshFile2 = this.app.vault.getAbstractFileByPath(file.path);
         if (freshFile2 && freshFile2 instanceof import_obsidian3.TFile && freshFile2.stat.size > 0) {
           ready = true;
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 500));
-        attempts++;
+        attempts2++;
       }
       if (!ready) {
         await this.appendDebugLog("WATCH_MODE_FILE_NOT_READY", { path: file.path });
@@ -2602,12 +2619,35 @@ ${JSON.stringify(details, null, 2)}`;
         new import_obsidian3.Notice(`Watch Mode: Created rounded version of ${file.name}`, 3e3);
         await this.appendDebugLog("WATCH_MODE_SUCCESS", { source: file.path, output: newPath, backup });
       } else {
+        this.refreshOpenNotes(freshFile.path);
         new import_obsidian3.Notice(`Watch Mode: Rounded original ${file.name}`, 3e3);
         await this.appendDebugLog("WATCH_MODE_OVERWRITE_SUCCESS", { path: file.path, backup });
       }
     } catch (error) {
       console.error("Watch Mode processing failed:", error);
       await this.appendDebugLog("WATCH_MODE_FAILED", { path: file.path, error: String(error) });
+    }
+  }
+  /**
+   * Forces Obsidian to refresh its view of an image across all open notes.
+   */
+  refreshOpenNotes(filePath) {
+    const leaves = this.app.workspace.getLeavesOfType("markdown");
+    for (const leaf of leaves) {
+      const view = leaf.view;
+      const content = view.editor.getValue();
+      if (content.includes(filePath) || content.includes(path.basename(filePath))) {
+        const editor = view.editor;
+        const cursor = editor.getCursor();
+        const lineCount = editor.lineCount();
+        const lastLine = editor.getLine(lineCount - 1);
+        editor.replaceRange(" ", { line: lineCount - 1, ch: lastLine.length });
+        editor.replaceRange("", { line: lineCount - 1, ch: lastLine.length }, { line: lineCount - 1, ch: lastLine.length + 1 });
+        editor.setCursor(cursor);
+        if (view.previewMode && view.previewMode.rerender) {
+          view.previewMode.rerender(true);
+        }
+      }
     }
   }
 };
