@@ -1109,7 +1109,11 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			if (!backupFolder) {
 				await this.app.vault.createFolder(this.BACKUP_FOLDER);
 			}
-		} catch (error) {
+		} catch (error: any) {
+			// Ignore "Folder already exists" errors which can happen in race conditions
+			if (error?.message && error.message.includes('Folder already exists')) {
+				return;
+			}
 			console.warn('Failed to create backup folder:', error);
 		}
 	}
@@ -1936,26 +1940,34 @@ export default class ImageRoundedFramePlugin extends Plugin {
             return b.match.start - a.match.start;
         });
 
-        // Apply changes
-        if (successMatches.length > 0) {
-            view.editor.transaction({
-                selections: [],
-                changes: successMatches.map(item => {
-                    const match = item.match;
-                    const finalPath = this.getRelativePathForNote(view, item.newPath);
-                    let processedPath = finalPath;
-                    if (match.path.includes('%20') || match.path.includes(' ')) {
-                        processedPath = finalPath.replace(/ /g, '%20');
-                    }
-                    const replacement = this.buildReference(match, processedPath);
-                    return {
-                        from: { line: match.lineNumber, ch: match.start },
-                        to: { line: match.lineNumber, ch: match.end },
-                        text: replacement
-                    };
-                })
-            });
-        }
+		// Apply changes
+		if (successMatches.length > 0) {
+			const changes = successMatches.map(item => {
+				const match = item.match;
+				const finalPath = this.getRelativePathForNote(view, item.newPath);
+				let processedPath = finalPath;
+				if (match.path.includes('%20') || match.path.includes(' ')) {
+					processedPath = finalPath.replace(/ /g, '%20');
+				}
+				const replacement = this.buildReference(match, processedPath);
+				return {
+					from: { line: match.lineNumber, ch: match.start },
+					to: { line: match.lineNumber, ch: match.end },
+					text: replacement
+				};
+			});
+
+			// Only execute transaction if there are valid changes
+			if (changes.length > 0) {
+				// We do NOT need to provide 'selections' if we don't want to move the cursor.
+				// However, if the API requires at least one range when 'selections' is present,
+				// we can just omit 'selections' entirely to keep the user's cursor where it is
+				// (or let Obsidian handle it).
+				view.editor.transaction({
+					changes: changes
+				});
+			}
+		}
 
 		if (newPaths.length > 0) {
 			this.lastAction = { originalPaths, backupPaths, localBackupPaths, newPaths, notePath: view.file?.path ?? '', timestamp: Date.now() };
