@@ -134,6 +134,12 @@ def apply_effects(input_path, output_path, radius_value, unit,
         # Composite border onto canvas
         canvas = Image.alpha_composite(canvas, border_canvas)
 
+    # 8. Auto-crop to remove unnecessary transparent whitespace
+    # This ensures the most outer visible pixel is the image edge
+    bbox = canvas.getbbox()
+    if bbox:
+        canvas = canvas.crop(bbox)
+
     # Save as PNG
     canvas.save(output_path, 'PNG')
     return True
@@ -1085,6 +1091,14 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			file = this.app.vault.getAbstractFileByPath(fullPath) as TFile | null;
 			if (file) return file;
 		}
+
+		// Fallback: Search by filename across the entire vault
+		// This handles cases where the link is just a filename but the file is in a subfolder
+		// or if the standard resolution logic misses it for some reason.
+		const filename = path.basename(decodedLink);
+		const allFiles = this.app.vault.getFiles();
+		const match = allFiles.find(f => f.name === filename);
+		if (match) return match;
 		
 		return null;
 	}

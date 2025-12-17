@@ -122,6 +122,12 @@ def apply_effects(input_path, output_path, radius_value, unit,
         # Composite border onto canvas
         canvas = Image.alpha_composite(canvas, border_canvas)
 
+    # 8. Auto-crop to remove unnecessary transparent whitespace
+    # This ensures the most outer visible pixel is the image edge
+    bbox = canvas.getbbox()
+    if bbox:
+        canvas = canvas.crop(bbox)
+
     # Save as PNG
     canvas.save(output_path, 'PNG')
     return True
