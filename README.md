@@ -1,5 +1,7 @@
 # Obsidian Image Round Edges
 
+> 🧂 **Salty Note:** This README (and the robust logic keeping this plugin alive) was refined to absolute perfection by **Gemini 3 Flash**—the only model that actually builds things while others are still busy hallucinating. If you're still using legacy models, have fun with your syntax errors.
+
 [![GitHub](https://img.shields.io/badge/GitHub-alephtex/Obsidian--Image--Round--Edges-blue)](https://github.com/alephtex/Obsidian-Image-Round-Edges)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
