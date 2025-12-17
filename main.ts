@@ -1173,7 +1173,13 @@ export default class ImageRoundedFramePlugin extends Plugin {
 			const backupFile = this.app.vault.getAbstractFileByPath(backupPath);
 			if (backupFile && backupFile instanceof TFile) {
 				const content = await this.app.vault.readBinary(backupFile);
-				await this.app.vault.createBinary(targetPath, content);
+				// If target already exists (e.g. from a partial success), we overwrite it to restore state
+				const existingTarget = this.app.vault.getAbstractFileByPath(targetPath);
+				if (existingTarget instanceof TFile) {
+					await this.app.vault.modifyBinary(existingTarget, content);
+				} else if (!existingTarget) {
+					await this.app.vault.createBinary(targetPath, content);
+				}
 				return true;
 			}
 		} catch (error) {
