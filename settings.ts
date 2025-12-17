@@ -27,6 +27,7 @@ export interface RoundedFrameSettings {
 	debugMode: boolean;
 	watchMode: boolean;
 	watchFolders: string;
+	watchOverwrite: boolean;
 }
 
 export const DEFAULT_SETTINGS: RoundedFrameSettings = {
@@ -49,6 +50,7 @@ export const DEFAULT_SETTINGS: RoundedFrameSettings = {
 	debugMode: false,
 	watchMode: false,
 	watchFolders: '',
+	watchOverwrite: false,
 };
 
 export class RoundedFrameSettingTab extends PluginSettingTab {
@@ -256,6 +258,17 @@ export class RoundedFrameSettingTab extends PluginSettingTab {
 						this.plugin.settings.watchFolders = value;
 						await this.plugin.saveSettings();
 					});
+			});
+
+		new Setting(containerEl)
+			.setName('Watch Mode: Overwrite original')
+			.setDesc('If enabled, Watch Mode will overwrite the original image with the rounded version instead of creating a copy (a backup is still created in the hidden folder).')
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.watchOverwrite);
+				toggle.onChange(async (value) => {
+					this.plugin.settings.watchOverwrite = value;
+					await this.plugin.saveSettings();
+				});
 			});
 	}
 }

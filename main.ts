@@ -2130,21 +2130,53 @@ export default class ImageRoundedFramePlugin extends Plugin {
 
 		try {
 			// Small delay to ensure file is fully written by the OS/Obsidian
-			await new Promise(resolve => setTimeout(resolve, 1000));
-			
-			// Verify file still exists and isn't empty
-			const freshFile = this.app.vault.getAbstractFileByPath(file.path);
-			if (!freshFile || !(freshFile instanceof TFile) || freshFile.stat.size === 0) {
-				return;
+			// We'll wait up to 5 seconds, checking every 500ms if the file has size > 0
+			let attempts = 0;
+			let ready = false;
+			while (attempts < 10) {
+				const freshFile = this.app.vault.getAbstractFileByPath(file.path);
+				if (freshFile && freshFile instanceof TFile && freshFile.stat.size > 0) {
+					ready = true;
+					break;
+				}
+				await new Promise(resolve => setTimeout(resolve, 500));
+				attempts++;
 			}
 
+			if (!ready) {
+				await this.appendDebugLog('WATCH_MODE_FILE_NOT_READY', { path: file.path });
+				return;
+			}
+			
+			const freshFile = this.app.vault.getAbstractFileByPath(file.path) as TFile;
+
 			// Hidden backup first for safety
-			const backup = await this.createBackup(file.path);
+			const backup = await this.createBackup(freshFile.path);
 			
-			const { newPath } = await this.roundImageFile(file, radius, unit, shadow, border);
+			const { newPath } = await this.roundImageFile(freshFile, radius, unit, shadow, border);
 			
-			new Notice(`Watch Mode: Applied rounded frame to ${file.name}`, 3000);
-			await this.appendDebugLog('WATCH_MODE_SUCCESS', { source: file.path, output: newPath, backup });
+			// 5. Overwrite original if setting is enabled
+			if (this.settings.watchOverwrite) {
+				try {
+					const roundedFile = this.app.vault.getAbstractFileByPath(newPath);
+					if (roundedFile && roundedFile instanceof TFile) {
+						const content = await this.app.vault.readBinary(roundedFile);
+						// Overwrite original
+						await this.app.vault.modifyBinary(file, content);
+						// Delete the suffixed version
+						await this.app.vault.delete(roundedFile);
+						
+						new Notice(`Watch Mode: Rounded and replaced original ${file.name}`, 3000);
+						await this.appendDebugLog('WATCH_MODE_OVERWRITE_SUCCESS', { path: file.path, backup });
+					}
+				} catch (err) {
+					console.error('Watch Mode overwrite failed:', err);
+					await this.appendDebugLog('WATCH_MODE_OVERWRITE_FAILED', { path: file.path, error: String(err) });
+				}
+			} else {
+				new Notice(`Watch Mode: Created rounded version of ${file.name}`, 3000);
+				await this.appendDebugLog('WATCH_MODE_SUCCESS', { source: file.path, output: newPath, backup });
+			}
 
 		} catch (error) {
 			console.error('Watch Mode processing failed:', error);
